@@ -22,8 +22,8 @@ import { Decisions } from './Decisions'
 import { pendingQuestions } from './derive'
 import { Questions } from './Questions'
 import { WorkPanel } from './WorkPanel'
-import { Badge, Button, IconButton, SectionLabel } from './ui'
-import { AlertIcon, BookmarkIcon, ChatIcon, CloseIcon, FileIcon, HelpIcon } from './icons'
+import { Button, IconButton } from './ui'
+import { AlertIcon, CloseIcon } from './icons'
 
 /**
  * The right rail.
@@ -35,11 +35,16 @@ import { AlertIcon, BookmarkIcon, ChatIcon, CloseIcon, FileIcon, HelpIcon } from
 
 export type RailTab = 'chat' | 'ask' | 'decisions' | 'work'
 
-const TABS: Array<{ id: RailTab; label: string; icon: JSX.Element }> = [
-  { id: 'chat', label: 'Chat', icon: <ChatIcon size={14} /> },
-  { id: 'ask', label: 'Questions', icon: <HelpIcon size={14} /> },
-  { id: 'decisions', label: 'Decisions', icon: <BookmarkIcon size={14} /> },
-  { id: 'work', label: 'Work', icon: <FileIcon size={14} /> }
+/**
+ * Four sections, named and nothing else. Icons alongside the labels pushed this
+ * row past the rail width and produced a horizontal scrollbar inside the
+ * navigation, so the row is now a fitted segmented control that always fits.
+ */
+const TABS: Array<{ id: RailTab; label: string }> = [
+  { id: 'chat', label: 'Chat' },
+  { id: 'ask', label: 'Questions' },
+  { id: 'decisions', label: 'Decisions' },
+  { id: 'work', label: 'Work' }
 ]
 
 export interface RailProps {
@@ -140,10 +145,10 @@ export function Rail(props: RailProps): JSX.Element {
           <h2 className="hs-rail-title">
             {spotlightAgent ? `One-on-one · ${spotlightAgent.name}` : room.name}
           </h2>
-          <p className="hs-rail-sub" title={room.goal}>
+          <p className="hs-rail-sub" title={spotlightAgent ? undefined : room.goal}>
             {spotlightAgent
-              ? `Private channel · ${agents.length} teammates in the room`
-              : 'Conversation of record'}
+              ? `Only you and ${spotlightAgent.name}`
+              : `${agents.length} teammate${agents.length === 1 ? '' : 's'} in the room`}
           </p>
         </div>
         <IconButton
@@ -222,7 +227,6 @@ export function Rail(props: RailProps): JSX.Element {
             onClick={() => onTab(item.id)}
             title={`${item.label}${counts[item.id] > 0 ? ` · ${counts[item.id]}` : ''}`}
           >
-            {item.icon}
             <span className="hs-rail-tab-label">{item.label}</span>
             {counts[item.id] > 0 ? (
               <span
@@ -238,24 +242,19 @@ export function Rail(props: RailProps): JSX.Element {
       <div className="hs-rail-body">
         {tab === 'chat' ? (
           spotlightAgent ? (
-            <>
-              <p className="hs-rail-note">
-                <Badge tone="accent">private</Badge> Only {spotlightAgent.name} sees these messages.
-              </p>
-              <Chat
-                messages={messages}
-                agents={agents}
-                tasks={tasks}
-                decisions={decisions}
-                artifacts={artifacts}
-                speaking={speaking}
-                privateAgentId={spotlightAgent.id}
-                emptyDetail={`Ask ${spotlightAgent.name} anything without the rest of the room reading it.`}
-                onReplyTo={onReplyTo}
-                onOpenRef={onOpenRef}
-                onOpenAgent={onOpenAgent}
-              />
-            </>
+            <Chat
+              messages={messages}
+              agents={agents}
+              tasks={tasks}
+              decisions={decisions}
+              artifacts={artifacts}
+              speaking={speaking}
+              privateAgentId={spotlightAgent.id}
+              emptyDetail={`Ask ${spotlightAgent.name} anything. The other teammates never receive these messages.`}
+              onReplyTo={onReplyTo}
+              onOpenRef={onOpenRef}
+              onOpenAgent={onOpenAgent}
+            />
           ) : (
             <Chat
               messages={messages}
@@ -312,20 +311,6 @@ export function Rail(props: RailProps): JSX.Element {
           />
         ) : null}
       </div>
-
-      <SectionLabel
-        aside={
-          composer.refs.length > 0 ? (
-            <Badge tone="accent" title="References that will travel with your message">
-              {composer.refs.length} attached
-            </Badge>
-          ) : null
-        }
-      >
-        {spotlightAgent && composer.privateTo
-          ? `Private to ${spotlightAgent.name}`
-          : 'Message the room'}
-      </SectionLabel>
 
       <Composer model={composer} agents={agents} />
     </aside>

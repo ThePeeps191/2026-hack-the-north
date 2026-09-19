@@ -59,6 +59,26 @@ export interface CollectOptions {
   toolRunLimit?: number
 }
 
+/**
+ * Recent transcript for one reader.
+ *
+ * A message sent privately to a teammate is part of that teammate's context and
+ * nobody else's. The filter runs before the limit so a private exchange cannot
+ * silently push room messages out of another agent's window either.
+ */
+function visibleMessages(
+  bus: HuddleBus,
+  roomId: string,
+  readerId: string | null,
+  limit: number
+): Message[] {
+  const all = bus.getMessages(roomId, Math.max(limit * 4, limit))
+  const visible = all.filter(
+    (message) => message.private === undefined || message.private.agentId === readerId
+  )
+  return visible.slice(-limit)
+}
+
 function agentName(agents: readonly Agent[], agentId: string | null): string {
   if (!agentId) return 'unowned'
   return agents.find((agent) => agent.id === agentId)?.name ?? 'a teammate who left'
@@ -133,8 +153,7 @@ export function collectRoomState(
       detail: attempt.detail,
       at: attempt.startedAt
     })),
-    messages: bus
-      .getMessages(roomId, options.messageLimit ?? 12)
+    messages: visibleMessages(bus, roomId, agentId, options.messageLimit ?? 12)
       .map((message) => ({
         author: message.author.type === 'human' ? 'Human' : agentName(agents, message.author.type === 'agent' ? message.author.agentId : null),
         kind: message.kind,

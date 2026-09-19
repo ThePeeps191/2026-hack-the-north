@@ -209,6 +209,7 @@ export class HuddleAgentRuntime implements AgentRuntime, RuntimeBridge {
     }
     if (input.refs && input.refs.length > 0) message.refs = input.refs
     if (input.replyToId) message.replyToId = input.replyToId
+    if (input.private) message.private = input.private
     const stored = this.deps.bus.addMessage(message)
     this.speakFor(stored, input)
     return stored
@@ -685,7 +686,9 @@ export class HuddleAgentRuntime implements AgentRuntime, RuntimeBridge {
       refs: outcome.reply.refs,
       speak: true,
       speechReason: 'answer',
-      spokenOverride: outcome.reply.spoken
+      spokenOverride: outcome.reply.spoken,
+      // An answer to a one-on-one question stays in that channel.
+      ...(question.private ? { private: question.private } : {})
     })
   }
 

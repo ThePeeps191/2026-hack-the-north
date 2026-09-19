@@ -58,6 +58,8 @@ export interface BridgeMessageInput {
   to?: string[]
   refs?: ContextRef[]
   replyToId?: string
+  /** Keeps a reply inside the one-on-one channel it was asked in. */
+  private?: { agentId: string }
   /** Request speech for this message. Defaults to true for short kinds. */
   speak?: boolean
   speechReason?: SpeechReason
