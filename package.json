@@ -10,11 +10,25 @@
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json --composite false",
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json --composite false",
     "typecheck": "npm run typecheck:node && npm run typecheck:web",
-    "test": "node --experimental-strip-types --test src/main/*.test.ts"
+    "test": "node --experimental-strip-types --test \"src/**/*.test.ts\"",
+    "test:voice": "npm --prefix tools/voice-lab test --if-present",
+    "start": "electron-vite preview",
+    "check": "npm run typecheck && npm test"
   },
   "dependencies": {
+    "@browserbasehq/sdk": "^2.20.0",
+    "@monaco-editor/react": "^4.7.0",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
+    "dotenv": "^18.0.1",
+    "localtunnel": "^2.0.2",
+    "monaco-editor": "^0.56.0",
+    "onnxruntime-node": "^1.30.0",
+    "openai": "^7.19.0",
+    "playwright-core": "^1.63.0",
     "react": "^19.2.1",
-    "react-dom": "^19.2.1"
+    "react-dom": "^19.2.1",
+    "ws": "^8.21.3"
   },
   "devDependencies": {
     "@types/node": "^22.19.1",
