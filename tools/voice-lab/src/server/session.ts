@@ -120,6 +120,12 @@ export class VoiceSession {
       this.send({ type: "timing", timing: this.timing.snapshot() });
       return;
     }
+    if (message.type === "playback.complete") {
+      if (this.guard.isPlaying() && this.guard.current() === message.generationId) {
+        this.guard.stop();
+      }
+      return;
+    }
     if (message.type === "speak") {
       await this.speak(message.text, message.voiceId);
     }
@@ -249,7 +255,6 @@ export class VoiceSession {
         }
       });
       if (this.guard.accepts(generationId)) {
-        this.guard.stop();
         this.send({ type: "playback", state: "ended", generationId });
       }
     } catch (error) {

@@ -15,13 +15,30 @@ def send(payload: dict) -> None:
     sys.stdout.flush()
 
 
+def limit_native_allocators() -> None:
+    threads = os.environ.get("WHISPER_CPU_THREADS", "2")
+    for key in (
+        "OMP_NUM_THREADS",
+        "MKL_NUM_THREADS",
+        "OPENBLAS_NUM_THREADS",
+        "NUMEXPR_NUM_THREADS",
+        "VECLIB_MAXIMUM_THREADS",
+    ):
+        os.environ.setdefault(key, threads)
+    # Intel MKL's custom heap (mkl_malloc) often fails on Windows laptops.
+    os.environ.setdefault("MKL_DISABLE_FAST_MM", "1")
+    os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
+    os.environ.setdefault("CT2_USE_EXPERIMENTAL_PACKED_GEMM", "0")
+
+
 def load_model():
+    limit_native_allocators()
     from faster_whisper import WhisperModel
 
     model_size = os.environ.get("WHISPER_MODEL", "base.en")
     device = os.environ.get("WHISPER_DEVICE", "cpu")
     compute_type = os.environ.get("WHISPER_COMPUTE_TYPE", "int8")
-    threads = int(os.environ.get("WHISPER_CPU_THREADS", "4"))
+    threads = int(os.environ.get("WHISPER_CPU_THREADS", "2"))
     send(
         {
             "event": "loading",

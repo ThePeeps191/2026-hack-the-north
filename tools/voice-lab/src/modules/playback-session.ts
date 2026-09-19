@@ -3,6 +3,12 @@ export type PlaybackPushResult = {
   firstAudible: boolean;
 };
 
+export type PlaybackState = "starting" | "audible" | "stopped" | "interrupted" | "ended";
+
+export function shouldHaltPlaybackSink(state: PlaybackState): boolean {
+  return state === "stopped" || state === "interrupted";
+}
+
 export class PlaybackSession {
   private generation = 0;
   private active = false;

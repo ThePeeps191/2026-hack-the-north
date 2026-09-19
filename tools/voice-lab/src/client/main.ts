@@ -1,7 +1,8 @@
-import { PlaybackSession } from "../modules/playback-session.ts";
+import { PlaybackSession, shouldHaltPlaybackSink } from "../modules/playback-session.ts";
 import { TimingTracker } from "../modules/timing.ts";
 import { TranscriptLog } from "../modules/transcript-log.ts";
 import {
+  Pcm16Assembler,
   decodeAudioFrame,
   float32ToPcm16,
   pcm16ToFloat32,
@@ -33,7 +34,10 @@ let voices: VoiceInfo[] = [];
 
 const audioContext = new AudioContext();
 const sources: AudioBufferSourceNode[] = [];
+const pcmAssembler = new Pcm16Assembler();
 let nextPlayTime = 0;
+let playGeneration = 0;
+let activeSources = 0;
 
 function stopSink(): void {
   for (const source of sources) {
@@ -45,22 +49,37 @@ function stopSink(): void {
   }
   sources.length = 0;
   nextPlayTime = 0;
+  activeSources = 0;
+  pcmAssembler.reset();
+}
+
+function noteSourceEnded(generationId: number): void {
+  if (playGeneration !== generationId) return;
+  activeSources = Math.max(0, activeSources - 1);
+  if (activeSources > 0 || !playback.isActive()) return;
+  stopBtn.disabled = true;
+  socket?.send(JSON.stringify({ type: "playback.complete", generationId }));
 }
 
 const playback = new PlaybackSession({
   now: () => performance.now(),
   stopSink,
   play: (pcm) => {
-    const buffer = audioContext.createBuffer(1, Math.max(1, pcm.length), SAMPLE_RATE_TTS);
-    buffer.getChannelData(0).set(pcm);
+    const sampleRate = audioContext.sampleRate || SAMPLE_RATE_TTS;
+    const samples = resampleLinear(pcm, SAMPLE_RATE_TTS, sampleRate);
+    const buffer = audioContext.createBuffer(1, Math.max(1, samples.length), sampleRate);
+    buffer.getChannelData(0).set(samples);
     const source = audioContext.createBufferSource();
     source.buffer = buffer;
     source.connect(audioContext.destination);
     const now = audioContext.currentTime;
-    if (nextPlayTime < now) nextPlayTime = now;
+    if (nextPlayTime < now + 0.03) nextPlayTime = now + 0.03;
+    const generationId = playback.current();
+    source.onended = () => noteSourceEnded(generationId);
     source.start(nextPlayTime);
     nextPlayTime += buffer.duration;
     sources.push(source);
+    activeSources += 1;
   }
 });
 
@@ -133,7 +152,9 @@ function connect(): void {
 
 function handleAudio(buffer: ArrayBuffer): void {
   const { generationId, pcm16 } = decodeAudioFrame(new Uint8Array(buffer));
-  const pcm = pcm16ToFloat32(pcm16);
+  const aligned = pcmAssembler.push(pcm16);
+  if (aligned.byteLength < 2) return;
+  const pcm = pcm16ToFloat32(aligned);
   const result = playback.push(generationId, pcm);
   if (result.firstAudible) {
     timing.markFirstAudible();
@@ -183,10 +204,13 @@ function handleMessage(message: ServerMessage): void {
   if (message.type === "playback") {
     if (message.state === "starting") {
       void audioContext.resume();
+      pcmAssembler.reset();
+      playGeneration = message.generationId;
+      activeSources = 0;
       playback.attach(message.generationId);
       stopBtn.disabled = false;
     }
-    if (message.state === "stopped" || message.state === "interrupted" || message.state === "ended") {
+    if (shouldHaltPlaybackSink(message.state)) {
       playback.stop();
       stopBtn.disabled = true;
     }

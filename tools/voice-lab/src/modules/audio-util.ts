@@ -74,3 +74,30 @@ export function decodeAudioFrame(bytes: Uint8Array): { generationId: number; pcm
     pcm16: bytes.subarray(4)
   };
 }
+
+export class Pcm16Assembler {
+  private leftover: number | null = null;
+
+  push(bytes: Uint8Array): Uint8Array {
+    const pieces: number[] = [];
+    let offset = 0;
+    if (this.leftover != null && bytes.length > 0) {
+      pieces.push(this.leftover, bytes[0] ?? 0);
+      this.leftover = null;
+      offset = 1;
+    }
+    const remaining = bytes.length - offset;
+    const even = remaining & ~1;
+    for (let i = 0; i < even; i += 1) {
+      pieces.push(bytes[offset + i] ?? 0);
+    }
+    if ((remaining & 1) === 1) {
+      this.leftover = bytes[offset + even] ?? 0;
+    }
+    return Uint8Array.from(pieces);
+  }
+
+  reset(): void {
+    this.leftover = null;
+  }
+}

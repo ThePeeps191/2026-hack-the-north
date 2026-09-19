@@ -25,6 +25,9 @@ async function main(): Promise<void> {
   transcriber.on("log", (line: string) => {
     console.error(`[whisper] ${line}`);
   });
+  transcriber.on("error", (error: Error) => {
+    console.error(`[whisper] ${error.message}`);
+  });
 
   let stt;
   try {

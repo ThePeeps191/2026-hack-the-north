@@ -45,7 +45,7 @@ export function loadConfig(): VoiceLabConfig {
     whisperModel: process.env.WHISPER_MODEL ?? "base.en",
     whisperDevice: process.env.WHISPER_DEVICE ?? "cpu",
     whisperComputeType: process.env.WHISPER_COMPUTE_TYPE ?? "int8",
-    whisperCpuThreads: process.env.WHISPER_CPU_THREADS ?? "4",
+    whisperCpuThreads: process.env.WHISPER_CPU_THREADS ?? "2",
     pythonBin: process.env.VOICE_LAB_PYTHON ?? venvPython ?? "python",
     workerScript: path.join(ROOT, "python", "transcribe_worker.py"),
     sileroModelPath: path.resolve(ROOT, process.env.SILERO_VAD_MODEL ?? "models/silero_vad.onnx")

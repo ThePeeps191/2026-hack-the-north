@@ -3,7 +3,7 @@ export { GenerationGuard } from "./generation-guard.ts";
 export { InterruptPolicy } from "./interrupt-policy.ts";
 export { TimingTracker } from "./timing.ts";
 export { TranscribeQueue } from "./transcribe-queue.ts";
-export { PlaybackSession } from "./playback-session.ts";
+export { PlaybackSession, shouldHaltPlaybackSink } from "./playback-session.ts";
 export { SileroVadEngine, loadSileroVadSession } from "./vad-engine.ts";
 export { ElevenLabsSynthesizer } from "./synthesizer.ts";
 export {
@@ -13,5 +13,6 @@ export {
   rmsLevel,
   concatFloat32,
   encodeAudioFrame,
-  decodeAudioFrame
+  decodeAudioFrame,
+  Pcm16Assembler
 } from "./audio-util.ts";

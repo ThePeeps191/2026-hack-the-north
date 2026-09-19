@@ -21,7 +21,8 @@ export type ClientMessage =
   | { type: "mic.start" }
   | { type: "mic.stop" }
   | { type: "speak"; text: string; voiceId: string }
-  | { type: "stopPlayback" };
+  | { type: "stopPlayback" }
+  | { type: "playback.complete"; generationId: number };
 
 export type ServerMessage =
   | { type: "hello"; status: "loading" | "ready" | "error"; detail: string; stt?: SttInfo }

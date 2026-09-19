@@ -33,6 +33,7 @@ export class FasterWhisperProcess extends EventEmitter {
     }
 
     this.readyPromise = new Promise<void>((resolve, reject) => {
+      let settled = false;
       const child = spawn(this.config.pythonBin, ["-u", this.config.workerScript], {
         cwd: path.dirname(this.config.workerScript),
         env: {
@@ -41,15 +42,21 @@ export class FasterWhisperProcess extends EventEmitter {
           WHISPER_MODEL: this.config.whisperModel,
           WHISPER_DEVICE: this.config.whisperDevice,
           WHISPER_COMPUTE_TYPE: this.config.whisperComputeType,
-          WHISPER_CPU_THREADS: this.config.whisperCpuThreads
+          WHISPER_CPU_THREADS: this.config.whisperCpuThreads,
+          MKL_DISABLE_FAST_MM: "1",
+          KMP_DUPLICATE_LIB_OK: "TRUE",
+          OMP_NUM_THREADS: this.config.whisperCpuThreads,
+          MKL_NUM_THREADS: this.config.whisperCpuThreads
         },
         stdio: ["pipe", "pipe", "pipe"]
       });
       this.child = child;
 
       const fail = (error: Error) => {
+        if (settled) return;
+        settled = true;
         if (!this.info) reject(error);
-        this.emit("error", error);
+        if (this.listenerCount("error") > 0) this.emit("error", error);
       };
 
       child.on("error", (error) => {
@@ -72,13 +79,19 @@ export class FasterWhisperProcess extends EventEmitter {
         if (text) this.emit("log", text);
       });
 
+      const resolveReady = () => {
+        if (settled) return;
+        settled = true;
+        resolve();
+      };
+
       child.stdout.on("data", (chunk: Buffer) => {
         this.buffer += chunk.toString("utf8");
         let newline = this.buffer.indexOf("\n");
         while (newline >= 0) {
           const line = this.buffer.slice(0, newline).trim();
           this.buffer = this.buffer.slice(newline + 1);
-          if (line) this.handleLine(line, resolve, fail);
+          if (line) this.handleLine(line, resolveReady, fail);
           newline = this.buffer.indexOf("\n");
         }
       });

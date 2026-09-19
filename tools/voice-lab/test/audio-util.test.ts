@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  Pcm16Assembler,
   decodeAudioFrame,
   encodeAudioFrame,
   pcm16ToFloat32,
@@ -37,5 +38,15 @@ describe("audio utilities", () => {
       pcm16: new Uint8Array([1, 2, 3, 4])
     });
   });
+
+  it("reassembles PCM16 samples split across odd-sized network chunks", () => {
+    const assembler = new Pcm16Assembler();
+    expect(assembler.push(new Uint8Array([0x00]))).toEqual(new Uint8Array([]));
+    expect(assembler.push(new Uint8Array([0x00, 0xff, 0x7f, 0x00]))).toEqual(
+      new Uint8Array([0x00, 0x00, 0xff, 0x7f])
+    );
+    expect(assembler.push(new Uint8Array([0x80]))).toEqual(new Uint8Array([0x00, 0x80]));
+  });
 });
+
 
