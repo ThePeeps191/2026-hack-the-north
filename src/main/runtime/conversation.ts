@@ -90,6 +90,8 @@ export class ConversationResponder {
       { kind: 'text', role: 'user', content: `The human asks: ${request.question}` }
     ]
 
+    const previousWorkState = agent.workState
+    const previousActivity = agent.activityLabel
     bus.setAgentActivity(agent.id, 'thinking', 'Answering a question')
 
     try {
@@ -124,6 +126,10 @@ export class ConversationResponder {
       const shape = toErrorShape(error)
       return { reply: null, failure: { code: shape.code, message: shape.message, fix: shape.fix ?? null } }
     } finally {
+      const current = bus.getAgent(agent.id)
+      if (current?.activityLabel === 'Answering a question') {
+        bus.setAgentActivity(agent.id, previousWorkState, previousActivity)
+      }
       bus.emit(room.id, { type: 'agent.stream', agentId: agent.id, taskId: null, delta: '', done: true })
     }
   }

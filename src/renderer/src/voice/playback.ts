@@ -47,6 +47,8 @@ export class VoicePlayback {
   private readonly assembler = new Pcm16Assembler()
   private context: AudioContext | null = null
   private gain: GainNode | null = null
+  private analyser: AnalyserNode | null = null
+  private readonly levelSamples = new Float32Array(256)
   private sources = new Set<AudioBufferSourceNode>()
   private nextPlayTime = 0
   private deafened = false
@@ -61,6 +63,15 @@ export class VoicePlayback {
 
   isPlaying(): boolean {
     return this.gate.current() !== null
+  }
+
+  /** RMS of the output graph, never inferred from queued speech or tokens. */
+  outputLevel(): number {
+    if (!this.analyser || this.deafened || this.context?.state !== 'running' || this.sources.size === 0) return 0
+    this.analyser.getFloatTimeDomainData(this.levelSamples)
+    let sum = 0
+    for (const sample of this.levelSamples) sum += sample * sample
+    return Math.min(1, Math.sqrt(sum / this.levelSamples.length))
   }
 
   /** `speech.begin`: the main process announced a generation. */
@@ -166,6 +177,7 @@ export class VoicePlayback {
     const context = this.context
     this.context = null
     this.gain = null
+    this.analyser = null
     if (context) void context.close().catch(() => undefined)
   }
 
@@ -192,10 +204,14 @@ export class VoicePlayback {
     try {
       const context = this.options.createContext(PLAYBACK_SAMPLE_RATE)
       const gain = context.createGain()
+      const analyser = context.createAnalyser()
+      analyser.fftSize = this.levelSamples.length
       gain.gain.value = this.deafened ? 0 : 1
-      gain.connect(context.destination)
+      gain.connect(analyser)
+      analyser.connect(context.destination)
       this.context = context
       this.gain = gain
+      this.analyser = analyser
       return context
     } catch (error) {
       const generation = this.gate.current()

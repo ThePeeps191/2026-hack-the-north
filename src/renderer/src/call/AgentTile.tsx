@@ -66,7 +66,8 @@ export function AgentTile({
 }: AgentTileProps): JSX.Element {
   const tone = workStateTone(agent.workState)
   const quiet = agent.workState === 'offline' || agent.workState === 'idle'
-  const level = speaking ? Math.min(1, Math.max(0.12, speaking.level)) : 0
+  // Playback analysis supplies this value. Do not manufacture an audible level.
+  const level = speaking ? Math.min(1, Math.max(0, speaking.level)) : 0
   const paused = agent.workState === 'paused'
 
   const classes = [
@@ -110,32 +111,6 @@ export function AgentTile({
       </button>
 
       <footer className="hs-tile-foot">
-        <span className="hs-tile-signals">
-          <span
-            className={`hs-conn${agent.connected ? ' is-on' : ''}`}
-            title={agent.connected ? 'Attached to a live session' : 'No live session attached'}
-          >
-            <span className="hs-conn-dot" aria-hidden="true" />
-            {agent.connected ? 'Connected' : 'Offline'}
-          </span>
-          <span className={`hs-workpill hs-workpill--${tone}`}>{workStateLabel(agent.workState)}</span>
-          {speaking ? (
-            <span className="hs-bars" aria-hidden="true">
-              <span style={{ height: `${Math.round(level * 12) + 3}px` }} />
-              <span style={{ height: `${Math.round(level * 9) + 5}px` }} />
-              <span style={{ height: `${Math.round(level * 13) + 3}px` }} />
-            </span>
-          ) : null}
-          {!speaking && queued ? (
-            <span className="hs-queued">
-              <SpeechIcon size={13} /> Waiting to speak
-            </span>
-          ) : null}
-          {!speaking && !queued && agent.speechState === 'interrupted' ? (
-            <span className="hs-queued is-cut">{speechLabel('interrupted')}</span>
-          ) : null}
-        </span>
-
         <span className="hs-tile-actions">
           <IconButton
             label={`Show ${agent.name}'s workspace`}

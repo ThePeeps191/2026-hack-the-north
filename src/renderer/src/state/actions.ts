@@ -6,6 +6,7 @@
 
 import type { AppSettings, CallState, StageState } from '../../../shared/types'
 import type { CallActions } from './view-model'
+import type { VoiceController } from '../voice/index'
 
 type ErrorReporter = (message: string | null) => void
 
@@ -14,6 +15,7 @@ export interface ActionContext {
   /** Reads the live call state, so toggles never act on a stale value. */
   getCall: () => CallState
   setError: ErrorReporter
+  voice?: Pick<VoiceController, 'start' | 'stop' | 'setMicMuted' | 'setDeafened' | 'stopSpeaking'>
 }
 
 const SECRET_KEYS = new Set([
@@ -28,13 +30,16 @@ const SECRET_KEYS = new Set([
  *
  * `setError` surfaces the real failure text inline; nothing is swallowed.
  */
-export function createActions({ roomId, getCall, setError }: ActionContext): CallActions {
-  const run = async (action: () => Promise<unknown>): Promise<void> => {
+export function createActions({ roomId, getCall, setError, voice }: ActionContext): CallActions {
+  const run = async (action: () => Promise<unknown>, propagate = false): Promise<void> => {
     try {
       await action()
       setError(null)
     } catch (error) {
       setError(error instanceof Error ? error.message : 'That action failed.')
+      // Forms must retain their draft until durability is confirmed. Other
+      // click actions report errors here without creating unhandled promises.
+      if (propagate) throw error
     }
   }
 
@@ -52,22 +57,22 @@ export function createActions({ roomId, getCall, setError }: ActionContext): Cal
 
     setGoal: (goal: string) => run(() => window.huddle.updateRoom({ id: roomId, goal })),
 
-    joinCall: () => run(() => window.huddle.joinCall(roomId)),
+    joinCall: () => run(() => voice ? voice.start(roomId) : window.huddle.joinCall(roomId)),
 
-    leaveCall: () => run(() => window.huddle.leaveCall(roomId)),
+    leaveCall: () => run(() => voice ? voice.stop() : window.huddle.leaveCall(roomId)),
 
     toggleMic: () => {
       const { micMuted } = getCall()
-      return run(() => window.huddle.voice.setMicMuted(!micMuted))
+      return run(() => (voice ?? window.huddle.voice).setMicMuted(!micMuted))
     },
 
     toggleDeafen: () => {
       const { deafened } = getCall()
-      return run(() => window.huddle.voice.setDeafened(!deafened))
+      return run(() => (voice ?? window.huddle.voice).setDeafened(!deafened))
     },
 
     stopSpeaking: (scope: 'current' | 'all') =>
-      run(() => window.huddle.voice.stopSpeaking({ roomId, scope })),
+      run(() => voice ? voice.stopSpeaking(scope) : window.huddle.voice.stopSpeaking({ roomId, scope })),
 
     addAgent: (presetId, options) =>
       run(() => window.huddle.addAgent({ roomId, presetId, ...options })),
@@ -87,7 +92,7 @@ export function createActions({ roomId, getCall, setError }: ActionContext): Cal
           ...(options?.refs ? { refs: options.refs } : {}),
           ...(options?.replyToId ? { replyToId: options.replyToId } : {}),
           ...(options?.privateTo ? { private: { agentId: options.privateTo } } : {})
-        })
+        }), true
       ),
 
     setStage,
@@ -120,7 +125,7 @@ export function createActions({ roomId, getCall, setError }: ActionContext): Cal
           statement: input.statement,
           ...(input.rationale ? { rationale: input.rationale } : {}),
           ...(input.supersedesId ? { supersedesId: input.supersedesId } : {})
-        })
+        }), true
       ),
 
     pauseWork: (agentId?: string) =>
@@ -145,7 +150,7 @@ export function createActions({ roomId, getCall, setError }: ActionContext): Cal
     dismissResumable: (itemId: string) => run(() => window.huddle.dismissResumable({ roomId, itemId })),
 
     updateSettings: (patch: Partial<AppSettings>) =>
-      run(() => window.huddle.settings.update(patch)),
+      run(() => window.huddle.settings.update(patch), true),
 
     setSecret: (key: string, value: string) =>
       run(() => {
@@ -156,7 +161,7 @@ export function createActions({ roomId, getCall, setError }: ActionContext): Cal
           key: key as 'OPENAI_API_KEY' | 'ELEVENLABS_API_KEY' | 'BROWSERBASE_API_KEY' | 'BROWSERBASE_PROJECT_ID',
           value
         })
-      }),
+      }, true),
 
     refreshCapabilities: () => run(() => window.huddle.settings.refreshCapabilities()),
 

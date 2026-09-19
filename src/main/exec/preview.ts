@@ -9,6 +9,7 @@ import type { HuddleBus } from '../contracts.ts'
 import { HuddleError } from '../huddle-error.ts'
 import { isTerminalJobStatus, type JobManager } from './jobs.ts'
 import localtunnel, { type Tunnel } from 'localtunnel'
+import { ensureWorkspaceViteAllowsTunnelHosts } from './vite-hosts.ts'
 
 /**
  * The dev-server preview.
@@ -232,6 +233,8 @@ export class PreviewManager {
       )
       return this.toInfo(failed)
     }
+
+    await ensureWorkspaceViteAllowsTunnelHosts(workspace.rootPath)
 
     const running: PreviewRecord = {
       roomId,

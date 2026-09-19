@@ -110,7 +110,7 @@ export function readLogTailSync(path: string, maxChars: number): { text: string;
 
 const PORT_PATTERNS = [
   /https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1?\]):(\d{2,5})/i,
-  /(?:listening|running|started|serving|ready)[^\d\n]{0,24}(\d{2,5})/i,
+  /(?:listening|running|started|serving)[^\d\n]{0,24}(\d{2,5})/i,
   /port\s*[:=]?\s*(\d{2,5})/i
 ]
 

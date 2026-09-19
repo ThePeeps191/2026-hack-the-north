@@ -318,6 +318,7 @@ describe('conversation path', () => {
         .join(' | ')}] requests=${provider.requests.length}`
     )
     assert.match(reply.body, /listing the workspace/)
+    assert.notEqual(deps.bus.agents[0]?.activityLabel, 'Answering a question')
 
     const task = deps.bus.tasks[0]
     assert.ok(task)

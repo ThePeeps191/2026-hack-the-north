@@ -15,7 +15,11 @@ import {
   DRAW_COUNTERS_SCRIPT,
   METRICS_SCRIPT,
   OBSERVE_SCRIPT,
+  TUNNEL_BYPASS_HEADER,
   TUNNEL_REMINDER_SCRIPT,
+  VITE_BLOCKED_HOST_SCRIPT,
+  looksLikeTunnelUrl,
+  tunnelContinueLabel,
   canvasStatsScript,
   drawInstrumentScript,
   planStrokes,
@@ -396,6 +400,9 @@ export class LiveSession {
     }
     const target = check.url
     return await this.run(`Navigation to ${target}`, async () => {
+      if (looksLikeTunnelUrl(target)) {
+        await this.context.setExtraHTTPHeaders({ ...TUNNEL_BYPASS_HEADER })
+      }
       const response: Response | null = await this.pageValue.goto(target, {
         waitUntil: 'domcontentloaded',
         timeout: GOTO_TIMEOUT_MS
@@ -403,41 +410,88 @@ export class LiveSession {
       await this.pageValue.waitForLoadState('load', { timeout: LOAD_STATE_TIMEOUT_MS }).catch(() => undefined)
       const status = response === null ? null : response.status()
       const tunnelNote = await this.handleTunnelReminder()
-      const prefix = tunnelNote === null ? '' : `${tunnelNote} `
+      const hostNote = await this.describeViteBlockedHost()
+      const prefix = [tunnelNote, hostNote].filter((item): item is string => item !== null).join(' ')
+      const lead = prefix.length > 0 ? `${prefix} ` : ''
       if (status !== null && status >= 400) {
-        return `${prefix}Navigated to ${target}; the server answered HTTP ${String(status)}.`
+        return `${lead}Navigated to ${target}; the server answered HTTP ${String(status)}.`
       }
       return status === null
-        ? `${prefix}Navigated to ${target}.`
-        : `${prefix}Navigated to ${target} (HTTP ${String(status)}).`
+        ? `${lead}Navigated to ${target}.`
+        : `${lead}Navigated to ${target} (HTTP ${String(status)}).`
     })
   }
 
   /**
-   * localtunnel answers a real browser with a password reminder page unless the
-   * request carries its bypass header. Detecting that page is the difference
-   * between "the app loaded" and "a tunnel notice loaded and nothing was tested",
-   * so Huddle checks for it and, when it finds it, says so and reloads once with
-   * the header set.
+   * localtunnel answers a real browser with a reminder page unless the request
+   * carries its bypass header. Detecting that page is the difference between
+   * "the app loaded" and "a tunnel notice loaded and nothing was tested".
    */
   private async handleTunnelReminder(): Promise<string | null> {
     if (this.tunnelHandled) return null
     this.tunnelHandled = true
-    let looksLikeReminder = false
+    if (!(await this.pageLooksLikeTunnelReminder())) return null
+    const notes: string[] = [
+      'The tunnel answered with its own reminder page first.'
+    ]
     try {
-      const answer: unknown = await this.pageValue.evaluate(TUNNEL_REMINDER_SCRIPT)
-      looksLikeReminder = answer === true
-    } catch {
-      return null
-    }
-    if (!looksLikeReminder) return null
-    try {
-      await this.context.setExtraHTTPHeaders({ 'bypass-tunnel-reminder': 'true' })
+      await this.context.setExtraHTTPHeaders({ ...TUNNEL_BYPASS_HEADER })
       await this.pageValue.reload({ waitUntil: 'domcontentloaded', timeout: GOTO_TIMEOUT_MS })
-      return 'The tunnel answered with its own reminder page first; Huddle asked it to bypass that and reloaded the page.'
+      notes.push('Huddle asked it to bypass that and reloaded the page.')
     } catch (error) {
       return `The tunnel answered with its own reminder page, and the reload after asking it to bypass that failed (${oneLine(messageOf(error), 160)}).`
     }
+    if (!(await this.pageLooksLikeTunnelReminder())) return notes.join(' ')
+    const clicked = await this.clickTunnelContinue()
+    if (clicked) {
+      notes.push('The bypass header was not enough, so Huddle pressed Continue on the reminder.')
+      await this.pageValue.waitForLoadState('load', { timeout: LOAD_STATE_TIMEOUT_MS }).catch(() => undefined)
+    }
+    if (await this.pageLooksLikeTunnelReminder()) {
+      notes.push('The reminder is still showing, so the project app was not reached.')
+    }
+    return notes.join(' ')
+  }
+
+  private async pageLooksLikeTunnelReminder(): Promise<boolean> {
+    try {
+      return (await this.pageValue.evaluate(TUNNEL_REMINDER_SCRIPT)) === true
+    } catch {
+      return false
+    }
+  }
+
+  private async describeViteBlockedHost(): Promise<string | null> {
+    try {
+      const blocked = (await this.pageValue.evaluate(VITE_BLOCKED_HOST_SCRIPT)) === true
+      if (!blocked) return null
+      return (
+        'Vite refused the tunneled Host header (allowedHosts). Add server.allowedHosts: true ' +
+        'to the project vite config, then restart the preview.'
+      )
+    } catch {
+      return null
+    }
+  }
+
+  private async clickTunnelContinue(): Promise<boolean> {
+    const locators = this.pageValue.locator('button, a, input[type="submit"]')
+    const count = await locators.count().catch(() => 0)
+    for (let index = 0; index < count; index += 1) {
+      const candidate = locators.nth(index)
+      const label =
+        (await candidate.innerText().catch(() => '')) ||
+        (await candidate.getAttribute('value').catch(() => '')) ||
+        ''
+      if (!tunnelContinueLabel(label)) continue
+      try {
+        await candidate.click({ timeout: ACTION_TIMEOUT_MS })
+        return true
+      } catch {
+        return false
+      }
+    }
+    return false
   }
 
   private async click(input: string): Promise<BrowserActionResult> {

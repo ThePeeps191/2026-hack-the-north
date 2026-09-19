@@ -9,7 +9,7 @@ import { DEFAULT_SETTINGS, type Capability, type JobRecord, type WorkspaceRecord
 import type { ExecutionHost } from '../contracts.ts'
 import { createFakeBus, type FakeBus } from './fake-bus.ts'
 import { createExecutionHost } from './index.ts'
-import { isProcessAlive } from './jobs.ts'
+import { detectPort, isProcessAlive } from './jobs.ts'
 
 // Keep Huddle's own data directory out of the repository while testing.
 process.env.HUDDLE_DATA_ROOT = join(mkdtempSync(join(tmpdir(), 'huddle-data-')), 'data')
@@ -70,6 +70,11 @@ async function writeScript(directory: string, name: string, source: string): Pro
 }
 
 describe('JobManager: real processes', () => {
+  test('does not mistake a Vite readiness duration for a network port', () => {
+    assert.equal(detectPort('VITE v6.4.3 ready in 354 ms'), null)
+    assert.equal(detectPort('Local: http://127.0.0.1:5273/'), 5273)
+  })
+
   test('captures real stdout, stderr and the exit code', async () => {
     const harness = await makeHarness()
     const script = await writeScript(

@@ -1,4 +1,4 @@
-import { useMemo, useRef, type JSX } from 'react'
+import { useMemo, useRef, useState, type JSX } from 'react'
 import type {
   Agent,
   CallState,
@@ -37,6 +37,7 @@ const DISCONNECTED: CallState = {
 
 export default function App(): JSX.Element {
   const hub = useHuddle()
+  const [openedRef, setOpenedRef] = useState<{ roomId: string; owner: SurfaceOwner; ref: ContextRef; token: number } | null>(null)
   const { snapshot, loading, loadError } = hub
 
   const room: Room | null = useMemo(() => {
@@ -56,8 +57,8 @@ export default function App(): JSX.Element {
   callRef.current = snapshot?.call ?? null
 
   const actions = useMemo(
-    () => createActions({ roomId, getCall: () => callRef.current ?? DISCONNECTED, setError: hub.setError }),
-    [roomId, hub.setError]
+    () => createActions({ roomId, getCall: () => callRef.current ?? DISCONNECTED, setError: hub.setError, voice: hub.controller }),
+    [roomId, hub.setError, hub.controller]
   )
 
   if (loading) {
@@ -105,20 +106,22 @@ export default function App(): JSX.Element {
     return workspaces.find((item) => item.agentId === owner.agentId) ?? null
   }
 
-  const openRef = (ref: ContextRef): void => {
-    const surface: ShareSurface =
+  const openRef = (ref: ContextRef, requestedSurface?: ShareSurface): void => {
+    const surface: ShareSurface = requestedSurface ?? (
       ref.kind === 'screenshot'
         ? 'browser'
         : ref.kind === 'job'
           ? 'terminal'
           : ref.kind === 'artifact'
             ? 'files'
-            : 'code'
-    const agentId = ref.kind === 'file' ? ref.agentId : undefined
-    void actions.showShare(
-      agentId && agentById.has(agentId) ? { kind: 'agent', agentId } : { kind: 'team' },
-      surface
-    )
+            : 'code')
+    const job = ref.kind === 'job' ? snapshot.jobs.find(job => job.id === ref.jobId) : null
+    const artifact = ref.kind === 'artifact' || ref.kind === 'screenshot' ? snapshot.artifacts.find(item => item.id === ref.artifactId) : null
+    const jobWorkspace = job ? workspaces.find(workspace => workspace.id === job.workspaceId) : null
+    const agentId = ref.kind === 'file' ? ref.agentId : job ? jobWorkspace?.agentId : artifact?.agentId
+    const owner: SurfaceOwner = agentId && agentById.has(agentId) ? { kind: 'agent', agentId } : { kind: 'team' }
+    setOpenedRef(current => ({ roomId, owner, ref, token: (current?.token ?? 0) + 1 }))
+    void actions.showShare(owner, surface)
   }
 
   const renderSurface = (args: {
@@ -134,6 +137,9 @@ export default function App(): JSX.Element {
       workspace: args.workspace,
       agent: args.agent,
       editable: args.owner.kind === 'team',
+      ...(openedRef?.roomId === roomId && openedRef.owner.kind === args.owner.kind &&
+        (openedRef.owner.kind === 'team' || (args.owner.kind === 'agent' && openedRef.owner.agentId === args.owner.agentId))
+        ? { openReference: { ref: openedRef.ref, token: openedRef.token } } : {}),
       onAttachRef: args.onAttachRef,
       onOpenRef: openRef
     }
@@ -174,8 +180,9 @@ export default function App(): JSX.Element {
       liveTranscript={hub.liveTranscript}
       speaking={hub.speaking}
       notices={hub.notices}
-      error={hub.error ?? snapshot.call.error}
+      error={hub.error ?? hub.voice.error ?? snapshot.call.error}
       actions={actions}
+      onOpenRef={openRef}
       renderSurface={renderSurface}
     />
   )

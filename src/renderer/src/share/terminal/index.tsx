@@ -4,6 +4,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
 import { NO_PROJECT_DETAIL, type SurfaceProps } from '../contract.ts'
 import type { JobRecord } from '../../../../shared/types.ts'
+import '../../styles/terminal.css'
 
 /**
  * The Terminal surface: a viewer of real processes.
@@ -21,27 +22,16 @@ import type { JobRecord } from '../../../../shared/types.ts'
  * room's jobs and the preload API has no job-list channel.
  */
 
-const MUTED = 'var(--muted, #a39b8f)'
-const LINE = 'var(--line, rgba(232, 226, 214, 0.1))'
-const RAISED = 'var(--bg-raised, #1b1f26)'
-const INSET = 'var(--bg-inset, #101217)'
-const TEXT = 'var(--text, #ece7dc)'
-const ACCENT = 'var(--accent, #d4a054)'
-const DANGER = 'var(--danger, #e08a7a)'
-const MONO = 'var(--font-mono, ui-monospace, monospace)'
 const OVERLAP_WINDOW = 4096
 
-interface StatusStyle {
-  label: string
-  color: string
-}
+interface StatusStyle { label: string; tone: string }
 
 function statusStyle(status: JobRecord['status'], exitCode: number | null): StatusStyle {
-  if (status === 'running' || status === 'starting') return { label: 'running', color: ACCENT }
-  if (status === 'exited') return { label: 'exit 0', color: '#8fbf7f' }
-  if (status === 'failed') return { label: `exit ${String(exitCode)}`, color: DANGER }
-  if (status === 'cancelled') return { label: 'cancelled', color: '#9db4d8' }
-  return { label: 'unknown', color: MUTED }
+  if (status === 'running' || status === 'starting') return { label: 'running', tone: 'running' }
+  if (status === 'exited') return { label: 'exit 0', tone: 'success' }
+  if (status === 'failed') return { label: `exit ${String(exitCode)}`, tone: 'failure' }
+  if (status === 'cancelled') return { label: 'cancelled', tone: 'cancelled' }
+  return { label: 'unknown', tone: 'unknown' }
 }
 
 function elapsed(job: JobRecord): string {
@@ -64,7 +54,7 @@ function overlapLength(written: string, incoming: string): number {
 }
 
 export function TerminalSurface(props: SurfaceProps): JSX.Element {
-  const { workspace, agent } = props
+  const { workspace, agent, openReference } = props
   const workspaceId = workspace?.id ?? null
 
   const [jobs, setJobs] = useState<JobRecord[]>([])
@@ -89,6 +79,7 @@ export function TerminalSurface(props: SurfaceProps): JSX.Element {
   useEffect(() => {
     if (workspaceId === null || hostRef.current === null) return undefined
     const host = hostRef.current
+    const tokens = getComputedStyle(host)
     const terminal = new Terminal({
       convertEol: true,
       disableStdin: true,
@@ -97,10 +88,10 @@ export function TerminalSurface(props: SurfaceProps): JSX.Element {
       fontFamily: '"Cascadia Mono", "Consolas", ui-monospace, monospace',
       scrollback: 5000,
       theme: {
-        background: '#101217',
-        foreground: '#ece7dc',
-        cursor: '#d4a054',
-        selectionBackground: 'rgba(212, 160, 84, 0.3)'
+        background: tokens.getPropertyValue('--bg-inset').trim(),
+        foreground: tokens.getPropertyValue('--text').trim(),
+        cursor: tokens.getPropertyValue('--accent').trim(),
+        selectionBackground: tokens.getPropertyValue('--accent-soft').trim()
       }
     })
     const fit = new FitAddon()
@@ -225,6 +216,11 @@ export function TerminalSurface(props: SurfaceProps): JSX.Element {
     []
   )
 
+  useEffect(() => {
+    if (openReference?.ref.kind !== 'job') return
+    void selectJob(openReference.ref.jobId)
+  }, [openReference, selectJob])
+
   const cancel = useCallback(
     async (jobId: string): Promise<void> => {
       setBusyJobId(jobId)
@@ -242,10 +238,10 @@ export function TerminalSurface(props: SurfaceProps): JSX.Element {
 
   if (workspace === null) {
     return (
-      <div style={{ padding: '28px 24px', maxWidth: 620 }}>
-        <h3 style={{ fontSize: 15, marginBottom: 8 }}>No project bound</h3>
-        <p style={{ color: MUTED }}>{NO_PROJECT_DETAIL}</p>
-        <p style={{ color: MUTED, marginTop: 8, fontSize: 12 }}>
+      <div className="ts-empty">
+        <h3>No project bound</h3>
+        <p>{NO_PROJECT_DETAIL}</p>
+        <p className="ts-empty__note">
           There are no simulated logs on this surface: with no workspace there are no processes.
         </p>
       </div>
@@ -253,57 +249,48 @@ export function TerminalSurface(props: SurfaceProps): JSX.Element {
   }
 
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: 'minmax(200px, 300px) minmax(0, 1fr)', height: '100%', minHeight: 0 }}>
-      <div style={{ borderRight: `1px solid ${LINE}`, background: RAISED, display: 'grid', gridTemplateRows: 'auto minmax(0, 1fr)', minHeight: 0 }}>
-        <div style={{ padding: '8px 10px', borderBottom: `1px solid ${LINE}` }}>
-          <div style={{ fontSize: 11.5, letterSpacing: 0.4, textTransform: 'uppercase', color: MUTED }}>Jobs</div>
-          <div style={{ fontSize: 11.5, color: MUTED, marginTop: 4 }}>
+    <div className="ts-surface">
+      <div className="ts-list">
+        <div className="ts-list__head">
+          <div className="ts-eyebrow">Jobs</div>
+          <div className="ts-meta">
             {agent !== null ? `${agent.name}'s workspace` : 'Team workspace'}
           </div>
         </div>
-        <div style={{ overflow: 'auto', minHeight: 0 }} aria-label="Jobs in this workspace">
+        <div className="ts-list__scroll" aria-label="Jobs in this workspace">
           {loadError !== null ? (
-            <p role="alert" style={{ padding: 12, color: DANGER, fontSize: 12 }}>
+            <p role="alert" className="ts-state ts-state--error">
               {loadError}
             </p>
           ) : null}
           {jobs.length === 0 && loadError === null ? (
-            <p style={{ padding: 12, color: MUTED, fontSize: 12 }}>
+            <p className="ts-state">
               No process has run in this workspace yet. Jobs appear here the moment a real command starts.
             </p>
           ) : null}
-          <ul style={{ listStyle: 'none', margin: 0, padding: 4 }}>
+          <ul className="ts-jobs">
             {jobs.map((job) => {
               const style = statusStyle(job.status, job.exitCode)
               const isSelected = job.id === selectedId
               return (
-                <li key={job.id} style={{ marginBottom: 4 }}>
+                <li key={job.id} className="ts-job">
                   <button
                     type="button"
                     onClick={() => void selectJob(job.id)}
                     aria-current={isSelected ? 'true' : undefined}
                     aria-label={`${job.label}, ${job.command}, ${style.label}`}
-                    style={{
-                      display: 'block',
-                      width: '100%',
-                      textAlign: 'left',
-                      padding: '6px 8px',
-                      borderRadius: 8,
-                      background: isSelected ? 'rgba(212, 160, 84, 0.16)' : 'transparent',
-                      border: `1px solid ${isSelected ? 'rgba(212, 160, 84, 0.4)' : 'transparent'}`
-                    }}
+                    className={`ts-job__select${isSelected ? ' is-selected' : ''}`}
                   >
-                    <div style={{ display: 'flex', gap: 8, alignItems: 'baseline' }}>
-                      <span style={{ fontSize: 12.5, color: TEXT, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    <div className="ts-job__title">
+                      <span className="ts-job__label">
                         {job.label}
                       </span>
-                      <span style={{ flex: 1 }} />
-                      <span style={{ fontSize: 11, color: style.color }}>{style.label}</span>
+                      <span className={`ts-status ts-status--${style.tone}`}>{style.label}</span>
                     </div>
-                    <div style={{ fontFamily: MONO, fontSize: 11.5, color: MUTED, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    <div className="ts-command" title={job.command}>
                       {job.command}
                     </div>
-                    <div style={{ fontSize: 11, color: MUTED, marginTop: 2, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    <div className="ts-job__meta">
                       <span>pid {job.pid ?? '—'}</span>
                       <span>{elapsed(job)}</span>
                       {job.port !== null ? <span>port {job.port}</span> : null}
@@ -316,12 +303,7 @@ export function TerminalSurface(props: SurfaceProps): JSX.Element {
                       onClick={() => void cancel(job.id)}
                       disabled={busyJobId === job.id}
                       aria-label={`Cancel ${job.label}`}
-                      style={{
-                        marginTop: 4,
-                        marginLeft: 8,
-                        fontSize: 11.5,
-                        color: busyJobId === job.id ? MUTED : DANGER
-                      }}
+                      className="ts-cancel"
                     >
                       {busyJobId === job.id ? 'cancelling…' : 'cancel process tree'}
                     </button>
@@ -333,64 +315,50 @@ export function TerminalSurface(props: SurfaceProps): JSX.Element {
         </div>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateRows: 'auto minmax(0, 1fr) auto', minHeight: 0, minWidth: 0 }}>
-        <div
-          style={{
-            display: 'flex',
-            gap: 10,
-            alignItems: 'center',
-            padding: '8px 12px',
-            borderBottom: `1px solid ${LINE}`,
-            background: RAISED,
-            flexWrap: 'wrap'
-          }}
-        >
-          <span style={{ fontSize: 12.5 }}>{selected === null ? 'No job selected' : selected.label}</span>
+      <div className="ts-output">
+        <div className="ts-output__head">
+          <span className="ts-output__title">{selected === null ? 'No job selected' : selected.label}</span>
           {selected !== null ? (
             <>
-              <span style={{ fontFamily: MONO, fontSize: 11.5, color: MUTED }}>{selected.command}</span>
-              <span style={{ fontFamily: MONO, fontSize: 11.5, color: MUTED, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              <span className="ts-command" title={selected.command}>{selected.command}</span>
+              <span className="ts-cwd" title={selected.cwd}>
                 {selected.cwd}
               </span>
             </>
           ) : null}
-          <span style={{ flex: 1 }} />
+          <span className="ts-spacer" />
           {selected !== null ? (
-            <button type="button" onClick={() => void selectJob(selected.id)} style={{ fontSize: 11.5, color: MUTED }}>
-              reload output
-            </button>
+            <>
+              <button type="button" className="ts-reload" onClick={() => props.onAttachRef({ kind: 'job', jobId: selected.id })}>
+                Attach
+              </button>
+              <button type="button" className="ts-reload" onClick={() => void selectJob(selected.id)}>
+                Reload
+              </button>
+            </>
           ) : null}
         </div>
 
-        <div style={{ minHeight: 0, background: INSET, padding: '4px 6px' }}>
-          <div ref={hostRef} style={{ height: '100%', width: '100%' }} aria-label="Real job output" role="log" />
+        <div className="ts-terminal">
+          <div ref={hostRef} className="ts-terminal__host" aria-label="Real job output" role="log" />
         </div>
 
-        <div style={{ borderTop: `1px solid ${LINE}`, background: RAISED, padding: '6px 12px', display: 'grid', gap: 6 }}>
+        <div className="ts-output__foot">
           {outputNote !== null ? (
-            <p role="status" style={{ fontSize: 11.5, color: MUTED }}>
+            <p role="status" className="ts-note">
               {outputNote}
             </p>
           ) : null}
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <div className="ts-readonly">
             <input
               type="text"
               disabled
               aria-label="Command input (disabled)"
               placeholder="Typed input is disabled — Huddle has no stdin channel to a job"
-              style={{
-                flex: 1,
-                fontFamily: MONO,
-                fontSize: 12,
-                padding: '4px 8px',
-                borderRadius: 8,
-                border: `1px solid ${LINE}`,
-                background: 'transparent',
-                color: MUTED
-              }}
+              className="ts-readonly__input"
             />
-            <span style={{ fontSize: 11.5, color: MUTED }}>
-              Ask an agent to run a command, or use the Files/Code surfaces. Nothing here is a real shell.
+            <span className="ts-note">
+              Output only. Ask a teammate to run a command.
             </span>
           </div>
         </div>

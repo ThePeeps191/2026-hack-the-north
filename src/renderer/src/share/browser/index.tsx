@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type JSX } from 'rea
 import { NO_PROJECT_DETAIL, type SurfaceOwner, type SurfaceProps } from '../contract.ts'
 import type { NetworkEntry, PreviewInfo, ScreenshotResult } from '../../../../shared/api.ts'
 import type { Agent, Artifact, BrowserSessionRecord, Capability, ContextRef } from '../../../../shared/types.ts'
+import './browser.css'
 
 /**
  * The Browser surface: one teammate's real remote browser.
@@ -18,14 +19,6 @@ import type { Agent, Artifact, BrowserSessionRecord, Capability, ContextRef } fr
  * pixels. The remote page is not embedded here and its DOM is not readable
  * across origins, so the surface never pretends to know an element by selector.
  */
-
-const MUTED = 'var(--muted, #a39b8f)'
-const LINE = 'var(--line, rgba(232, 226, 214, 0.1))'
-const RAISED = 'var(--bg-raised, #1b1f26)'
-const INSET = 'var(--bg-inset, #101217)'
-const TEXT = 'var(--text, #ece7dc)'
-const ACCENT = 'var(--accent, #d4a054)'
-const DANGER = 'var(--danger, #e08a7a)'
 
 const CLICK_REGION_PX = 48
 const MAX_CAPTURES = 12
@@ -129,10 +122,10 @@ function isOpen(record: BrowserSessionRecord | null): boolean {
   return record !== null && (record.status === 'live' || record.status === 'starting')
 }
 
-function statusTone(status: BrowserSessionRecord['status']): string {
-  if (status === 'live') return ACCENT
-  if (status === 'failed') return DANGER
-  return MUTED
+function statusClass(status: BrowserSessionRecord['status']): string {
+  if (status === 'live') return 'is-live'
+  if (status === 'failed') return 'is-failed'
+  return 'is-muted'
 }
 
 /** A teammate a session can belong to. QA and systems agents are the usual testers. */
@@ -461,10 +454,10 @@ export function BrowserSurface(props: SurfaceProps): JSX.Element {
 
   if (workspace === null) {
     return (
-      <div style={{ padding: '4px 0', maxWidth: 620 }}>
-        <h3 style={{ fontSize: 15, marginBottom: 8 }}>No project bound</h3>
-        <p style={{ color: MUTED }}>{NO_PROJECT_DETAIL}</p>
-        <p style={{ color: MUTED, marginTop: 8, fontSize: 12 }}>
+      <div className="browser-empty">
+        <h3>No project bound</h3>
+        <p>{NO_PROJECT_DETAIL}</p>
+        <p>
           A remote browser exists to check a running app, so there is nothing for it to load yet.
         </p>
       </div>
@@ -502,97 +495,60 @@ export function BrowserSurface(props: SurfaceProps): JSX.Element {
     return (
       <div
         aria-hidden="true"
+        className={`browser-overlay${dashed ? ' is-dashed' : ''}`}
         style={{
-          position: 'absolute',
           left: `${String((rect.x / displayedSize.width) * 100)}%`,
           top: `${String((rect.y / displayedSize.height) * 100)}%`,
           width: `${String((rect.width / displayedSize.width) * 100)}%`,
-          height: `${String((rect.height / displayedSize.height) * 100)}%`,
-          border: `1px ${dashed ? 'dashed' : 'solid'} ${ACCENT}`,
-          background: dashed ? 'transparent' : 'rgba(212, 160, 84, 0.18)',
-          pointerEvents: 'none'
+          height: `${String((rect.height / displayedSize.height) * 100)}%`
         }}
       />
     )
   }
 
   return (
-    <div
-      style={{
-        display: 'grid',
-        gridTemplateRows: 'auto minmax(0, 1fr)',
-        gap: 12,
-        height: '100%',
-        minHeight: 0
-      }}
-    >
+    <div className="browser-surface">
       {/* ---------------- header ---------------- */}
-      <div
-        style={{
-          display: 'grid',
-          gap: 8,
-          background: RAISED,
-          border: `1px solid ${LINE}`,
-          borderRadius: 10,
-          padding: '10px 12px'
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-          <span style={{ fontSize: 11.5, letterSpacing: 0.4, textTransform: 'uppercase', color: MUTED }}>
+      <div className="browser-panel browser-header">
+        <div className="browser-header__row">
+          <span className="browser-eyebrow">
             {ownerLabel(owner, agent)} remote browser
           </span>
           {session !== null ? (
-            <span
-              style={{
-                fontSize: 11.5,
-                borderRadius: 999,
-                padding: '2px 8px',
-                border: `1px solid ${statusTone(session.status)}`,
-                color: statusTone(session.status)
-              }}
-            >
+            <span className={`browser-status ${statusClass(session.status)}`}>
               {session.status}
               {session.remoteId !== null ? ` · ${session.remoteId.slice(0, 8)}` : ''}
             </span>
           ) : (
-            <span
-              style={{
-                fontSize: 11.5,
-                color: MUTED,
-                borderRadius: 999,
-                padding: '2px 8px',
-                border: `1px solid ${LINE}`
-              }}
-            >
+            <span className="browser-status is-empty">
               no session
             </span>
           )}
-          <span style={{ flex: 1 }} />
+          <span className="browser-spacer" />
           {liveViewAvailable && session !== null ? (
             <a
               href={session.liveViewUrl ?? ''}
               target="_blank"
               rel="noreferrer"
-              style={{ color: ACCENT, fontSize: 12.5 }}
+              className="browser-live-view"
               title={session.liveViewUrl ?? ''}
             >
               Open the live view of this session ↗
             </a>
           ) : session !== null ? (
-            <span style={{ color: MUTED, fontSize: 12 }}>
+            <span className="browser-subtle">
               Browserbase returned no live-view URL for this session
             </span>
           ) : null}
         </div>
 
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+        <div className="browser-actions">
           {isOpen(session) ? (
             <button
               type="button"
               className="primary"
               onClick={() => void closeSession()}
               disabled={busy !== null}
-              style={{ justifySelf: 'start' }}
             >
               {busy === 'closing' ? 'Closing…' : 'Close the session'}
             </button>
@@ -602,7 +558,6 @@ export function BrowserSurface(props: SurfaceProps): JSX.Element {
               className="primary"
               onClick={() => void openSession()}
               disabled={busy !== null}
-              style={{ justifySelf: 'start' }}
               title="Creates a real Browserbase session and points it at the project's reachable preview URL"
             >
               {busy === 'opening'
@@ -637,19 +592,19 @@ export function BrowserSurface(props: SurfaceProps): JSX.Element {
             {busy === 'preview' ? 'Starting the preview…' : 'Start / check the preview'}
           </button>
           {session !== null && session.currentUrl !== null ? (
-            <span className="mono" style={{ color: MUTED, fontSize: 11.5 }}>
+            <span className="mono browser-current-url">
               {session.currentUrl}
             </span>
           ) : null}
         </div>
 
         {session !== null ? (
-          <p style={{ fontSize: 12, color: MUTED }}>
+          <p className="browser-subtle">
             {session.title !== null && session.title.length > 0 ? `“${session.title}” — ` : ''}
             {session.detail}
           </p>
         ) : (
-          <p style={{ fontSize: 12, color: MUTED }}>
+          <p className="browser-subtle">
             No remote browser is attached to {ownerLabel(owner, agent)} right now. A session is a real Chromium in
             Browserbase&apos;s cloud: it runs on another machine, so it can only load a URL that machine can reach.
             Huddle points it at the project&apos;s tunnel URL, never at this laptop&apos;s localhost.
@@ -657,59 +612,46 @@ export function BrowserSurface(props: SurfaceProps): JSX.Element {
         )}
 
         {preview !== null ? (
-          <p style={{ fontSize: 12, color: preview.publicUrl === null ? DANGER : MUTED }}>
+          <p className={`browser-subtle${preview.publicUrl === null ? ' is-danger' : ''}`}>
             Preview {preview.state} ({preview.mode}): {preview.publicUrl ?? 'no reachable public URL'}. {preview.detail}
           </p>
         ) : null}
 
         {blocked !== null ? (
-          <div
-            role="status"
-            style={{ background: INSET, border: `1px solid ${LINE}`, borderRadius: 8, padding: '8px 10px' }}
-          >
-            <strong style={{ fontSize: 12.5 }}>{blocked.label} is not ready.</strong>
-            <p style={{ fontSize: 12, color: MUTED, marginTop: 2 }}>{blocked.detail}</p>
+          <div role="status" className="browser-notice">
+            <strong>{blocked.label} is not ready.</strong>
+            <p>{blocked.detail}</p>
             {blocked.fix !== null ? (
-              <p style={{ fontSize: 12, color: MUTED, marginTop: 2 }}>{blocked.fix}</p>
+              <p>{blocked.fix}</p>
             ) : null}
           </div>
         ) : null}
 
         {error !== null ? (
-          <div
-            role="alert"
-            style={{ background: INSET, border: `1px solid ${DANGER}`, borderRadius: 8, padding: '8px 10px' }}
-          >
-            <strong style={{ fontSize: 12.5, color: DANGER }}>
+          <div role="alert" className="browser-notice is-error">
+            <strong>
               {error.code !== null ? `${error.code}: ` : ''}
               {error.message}
             </strong>
             {error.fix !== null ? (
-              <p style={{ fontSize: 12, color: MUTED, marginTop: 2 }}>{error.fix}</p>
+              <p>{error.fix}</p>
             ) : null}
           </div>
         ) : null}
 
         {note !== null ? (
-          <p role="status" style={{ fontSize: 12, color: MUTED }}>
+          <p role="status" className="browser-subtle">
             {note}
           </p>
         ) : null}
       </div>
 
       {/* ---------------- body ---------------- */}
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'minmax(0, 1fr) minmax(240px, 340px)',
-          gap: 12,
-          minHeight: 0
-        }}
-      >
-        <div style={{ display: 'grid', gridTemplateRows: 'auto minmax(0, 1fr) auto', gap: 8, minHeight: 0 }}>
-          <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+      <div className="browser-body">
+        <div className="browser-capture-column">
+          <div className="browser-capture-meta">
             {currentCapture !== null ? (
-              <span style={{ fontSize: 12, color: MUTED }}>
+              <span className="browser-subtle">
                 captured {formatClock(currentCapture.at)} · captured at{' '}
                 {String(currentCapture.result.viewport.width)}×{String(currentCapture.result.viewport.height)} (the
                 remote page&apos;s viewport)
@@ -718,11 +660,11 @@ export function BrowserSurface(props: SurfaceProps): JSX.Element {
                   : ''}
               </span>
             ) : (
-              <span style={{ fontSize: 12, color: MUTED }}>
+              <span className="browser-subtle">
                 Screenshots come from the live session, not from a preview image.
               </span>
             )}
-            <span style={{ flex: 1 }} />
+            <span className="browser-spacer" />
             <button
               type="button"
               className="ghost"
@@ -733,25 +675,16 @@ export function BrowserSurface(props: SurfaceProps): JSX.Element {
             </button>
           </div>
 
-          <div
-            style={{
-              background: INSET,
-              border: `1px solid ${LINE}`,
-              borderRadius: 10,
-              overflow: 'auto',
-              minHeight: 0,
-              padding: 10
-            }}
-          >
+          <div className="browser-capture-frame">
             {currentCapture === null ? (
-              <div style={{ padding: 18, color: MUTED, maxWidth: 640 }}>
-                <h3 style={{ fontSize: 14, color: TEXT, marginBottom: 6 }}>No screenshot yet</h3>
-                <p style={{ fontSize: 12.5 }}>
+              <div className="browser-screenshot-empty">
+                <h3>No screenshot yet</h3>
+                <p>
                   {isOpen(session)
                     ? 'The session is live. Capture a screenshot to see exactly what the remote browser is showing right now.'
                     : 'Open a session and capture a screenshot. What appears here is the real PNG that remote browser produced.'}
                 </p>
-                <p style={{ fontSize: 12.5, marginTop: 8 }}>
+                <p>
                   Drag a box (or click a point) on a capture to attach that region to the composer. Coordinates are
                   recorded in the captured image&apos;s pixels; the remote page is not embedded here and its DOM is
                   not readable from Huddle.
@@ -759,13 +692,7 @@ export function BrowserSurface(props: SurfaceProps): JSX.Element {
               </div>
             ) : (
               <div
-                style={{
-                  position: 'relative',
-                  display: 'inline-block',
-                  maxWidth: '100%',
-                  cursor: 'crosshair',
-                  touchAction: 'none'
-                }}
+                className="browser-image-select"
                 onPointerDown={(event) => {
                   if (currentCapture === null) return
                   const fallback = currentCapture.imageSize ?? currentCapture.result.viewport
@@ -803,7 +730,7 @@ export function BrowserSurface(props: SurfaceProps): JSX.Element {
                   ref={imageRef}
                   src={currentCapture.result.dataUrl}
                   alt={`Remote browser screenshot of ${currentCapture.result.url}`}
-                  style={{ display: 'block', maxWidth: '100%', height: 'auto', borderRadius: 6, userSelect: 'none' }}
+                  className="browser-screenshot"
                   draggable={false}
                 />
                 {dragBox !== null ? overlay(dragBox, false) : null}
@@ -814,36 +741,19 @@ export function BrowserSurface(props: SurfaceProps): JSX.Element {
             )}
           </div>
 
-          <div
-            style={{
-              background: RAISED,
-              border: `1px solid ${LINE}`,
-              borderRadius: 10,
-              padding: '8px 10px',
-              maxHeight: 240,
-              overflow: 'auto'
-            }}
-          >
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-              <span style={{ fontSize: 11.5, letterSpacing: 0.4, textTransform: 'uppercase', color: MUTED }}>
+          <div className="browser-panel browser-network">
+            <div className="browser-network__header">
+              <span className="browser-eyebrow">
                 Real responses from this session
               </span>
-              <span style={{ flex: 1 }} />
+              <span className="browser-spacer" />
               <input
                 type="search"
                 value={networkFilter}
                 onChange={(event) => setNetworkFilter(event.target.value)}
                 placeholder="filter by URL…"
                 aria-label="Filter captured responses by URL"
-                style={{
-                  width: 160,
-                  fontSize: 12,
-                  padding: '3px 8px',
-                  borderRadius: 8,
-                  border: `1px solid ${LINE}`,
-                  background: INSET,
-                  color: TEXT
-                }}
+                className="browser-network__filter"
               />
               <button
                 type="button"
@@ -856,42 +766,34 @@ export function BrowserSurface(props: SurfaceProps): JSX.Element {
             </div>
 
             {network === null ? (
-              <p style={{ fontSize: 12, color: MUTED, marginTop: 6 }}>
+              <p className="browser-copy">
                 Huddle records the responses this remote session produced, with a size-bounded body, so a QA agent can
                 compare a payload with what the UI actually shows. Press <em>read</em> to load them; the agents read
                 the same captures through their browser tool.
               </p>
             ) : network.length === 0 ? (
-              <p style={{ fontSize: 12, color: MUTED, marginTop: 6 }}>
+              <p className="browser-copy">
                 Nothing captured matched{networkFilter.trim().length > 0 ? ` “${networkFilter.trim()}”` : ' this session'} yet.
                 Navigate or reload in the session and read again.
               </p>
             ) : (
-              <ol style={{ listStyle: 'none', display: 'grid', gap: 6, marginTop: 6 }}>
+              <ol className="browser-network__list">
                 {network
                   .slice()
                   .reverse()
                   .map((entry, index) => (
-                    <li key={`${entry.url}-${String(index)}`} style={{ display: 'grid', gap: 2 }}>
-                      <div style={{ display: 'flex', gap: 8, alignItems: 'baseline', minWidth: 0 }}>
+                    <li key={`${entry.url}-${String(index)}`} className="browser-network__item">
+                      <div className="browser-network__line">
                         <span
-                          className="mono"
-                          style={{ fontSize: 11.5, color: entry.status >= 400 ? DANGER : ACCENT }}
+                          className={`mono browser-network__status${entry.status >= 400 ? ' is-error' : ''}`}
                         >
                           {entry.status}
                         </span>
-                        <span className="mono" style={{ fontSize: 11.5, color: MUTED }}>
+                        <span className="mono browser-network__method">
                           {entry.method}
                         </span>
                         <span
-                          className="mono"
-                          style={{
-                            fontSize: 11.5,
-                            color: TEXT,
-                            overflow: 'hidden',
-                            textOverflow: 'ellipsis',
-                            whiteSpace: 'nowrap'
-                          }}
+                          className="mono browser-network__url"
                           title={entry.url}
                         >
                           {entry.url}
@@ -899,28 +801,17 @@ export function BrowserSurface(props: SurfaceProps): JSX.Element {
                       </div>
                       {entry.body.length > 0 ? (
                         <details>
-                          <summary style={{ fontSize: 11.5, color: MUTED, cursor: 'pointer' }}>
+                          <summary className="browser-network__summary">
                             body · {formatBytes(entry.body.length)}
                           </summary>
                           <pre
-                            className="mono"
-                            style={{
-                              fontSize: 11.5,
-                              whiteSpace: 'pre-wrap',
-                              wordBreak: 'break-word',
-                              background: INSET,
-                              borderRadius: 6,
-                              padding: 8,
-                              marginTop: 4,
-                              maxHeight: 200,
-                              overflow: 'auto'
-                            }}
+                            className="mono browser-network__body"
                           >
                             {entry.body}
                           </pre>
                         </details>
                       ) : (
-                        <span style={{ fontSize: 11.5, color: MUTED }}>no body was captured for this response</span>
+                        <span className="browser-network__empty">no body was captured for this response</span>
                       )}
                     </li>
                   ))}
@@ -930,37 +821,37 @@ export function BrowserSurface(props: SurfaceProps): JSX.Element {
         </div>
 
         {/* ---------------- evidence ---------------- */}
-        <div style={{ display: 'grid', gap: 8, alignContent: 'start', minHeight: 0 }}>
-          <div style={{ background: RAISED, border: `1px solid ${LINE}`, borderRadius: 10, padding: '8px 10px' }}>
-            <span style={{ fontSize: 11.5, letterSpacing: 0.4, textTransform: 'uppercase', color: MUTED }}>
+        <div className="browser-evidence">
+          <div className="browser-panel browser-evidence__panel">
+            <span className="browser-eyebrow">
               Screenshot evidence
             </span>
             {captures.length === 0 && priorArtifacts.length === 0 ? (
-              <p style={{ fontSize: 12, color: MUTED, marginTop: 6 }}>
+              <p className="browser-copy">
                 No screenshot artifact exists for {ownerLabel(owner, agent)} yet. Every capture is written to the
                 room&apos;s artifact folder with its real pixel size, which is what makes it evidence rather than a
                 claim.
               </p>
             ) : (
-              <ol style={{ listStyle: 'none', display: 'grid', gap: 10, marginTop: 6 }}>
+              <ol className="browser-evidence__list">
                 {captures.map((item) => {
                   const size = item.imageSize ?? item.result.viewport
                   return (
-                    <li key={item.at} style={{ display: 'grid', gap: 2 }}>
-                      <span style={{ fontSize: 12 }}>
+                    <li key={item.at} className="browser-evidence__item">
+                      <span className="browser-evidence__primary">
                         {String(size.width)}×{String(size.height)} px ·{' '}
                         {formatBytes(item.result.artifact.bytes)} · {formatClock(item.at)}
                       </span>
-                      <span className="mono" style={{ fontSize: 11, color: MUTED, wordBreak: 'break-all' }}>
+                      <span className="mono browser-evidence__path">
                         {item.result.artifact.path !== null
                           ? basename(item.result.artifact.path)
                           : 'no file path was recorded'}
                       </span>
-                      <span style={{ fontSize: 11.5, color: MUTED, wordBreak: 'break-all' }}>
+                      <span className="browser-evidence__url">
                         {item.result.url}
                       </span>
                       {item.note !== null ? (
-                        <span style={{ fontSize: 11.5, color: ACCENT }}>{item.note}</span>
+                        <span className="browser-evidence__note">{item.note}</span>
                       ) : null}
                     </li>
                   )
@@ -968,21 +859,20 @@ export function BrowserSurface(props: SurfaceProps): JSX.Element {
                 {priorArtifacts.map((artifact) => {
                   const size = dimensionsFrom(artifact.title)
                   return (
-                    <li key={artifact.id} style={{ display: 'grid', gap: 2 }}>
-                      <span style={{ fontSize: 12 }}>
+                    <li key={artifact.id} className="browser-evidence__item">
+                      <span className="browser-evidence__primary">
                         {size !== null
                           ? `${String(size.width)}×${String(size.height)} px · `
                           : 'pixel size not recorded · '}
                         {formatBytes(artifact.bytes)} · {formatStamp(artifact.createdAt)}
                       </span>
-                      <span style={{ fontSize: 11.5, color: MUTED }} title={artifact.title}>
+                      <span className="browser-evidence__artifact" title={artifact.title}>
                         {artifact.title}
                       </span>
                       {artifact.path !== null ? (
                         <button
                           type="button"
-                          className="ghost"
-                          style={{ justifySelf: 'start', fontSize: 11.5 }}
+                          className="ghost browser-evidence__reveal"
                           onClick={() => void window.huddle.settings.revealPath(artifact.path ?? '')}
                           title={artifact.path}
                         >
@@ -996,19 +886,19 @@ export function BrowserSurface(props: SurfaceProps): JSX.Element {
             )}
           </div>
 
-          <div style={{ background: RAISED, border: `1px solid ${LINE}`, borderRadius: 10, padding: '8px 10px' }}>
-            <span style={{ fontSize: 11.5, letterSpacing: 0.4, textTransform: 'uppercase', color: MUTED }}>
+          <div className="browser-panel browser-evidence__panel">
+            <span className="browser-eyebrow">
               What this session is
             </span>
-            <ul style={{ listStyle: 'none', display: 'grid', gap: 4, marginTop: 6, fontSize: 12, color: MUTED }}>
+            <ul className="browser-session-facts">
               <li>Started {formatStamp(session?.startedAt ?? null)}</li>
               <li>Owner: {sessionAgent?.name ?? 'no teammate'}</li>
               <li>Provider session: {session?.remoteId ?? 'none yet'}</li>
               <li>Live view: {liveViewAvailable ? 'available' : 'not provided'}</li>
               <li>
-                Reachable from Browserbase&apos;s cloud, not this laptop, so a localhost URL can never work here.
+                The remote browser runs in the cloud, so it cannot open a localhost URL on this machine.
               </li>
-              <li>The page never receives Huddle&apos;s preload API, a file path or a credential.</li>
+              <li>The remote page cannot see this machine&apos;s files, keys, or Huddle internals.</li>
             </ul>
           </div>
         </div>

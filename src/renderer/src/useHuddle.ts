@@ -22,6 +22,7 @@ const MAX_NOTICES = 8
 
 const EMPTY_VOICE: VoiceUiState = {
   micLevel: 0,
+  playbackLevel: 0,
   speaking: false,
   captureState: 'off',
   playbackState: 'idle',
@@ -193,6 +194,7 @@ export function useHuddle(): {
     const messages = snapshot?.messages ?? []
     const result: Record<string, SpeakingState> = {}
     for (const [agentId, state] of Object.entries(playback)) {
+      if (voice.speakingAgentId !== agentId || voice.playbackState !== 'playing') continue
       const message: Message | undefined = state.messageId
         ? messages.find((item) => item.id === state.messageId)
         : undefined
@@ -201,12 +203,12 @@ export function useHuddle(): {
         agentId,
         generationId: state.generationId,
         text: liveText || message?.body || '',
-        level: 1,
+        level: voice.playbackLevel,
         messageId: state.messageId
       }
     }
     return result
-  }, [playback, snapshot?.messages, voice.speakingAgentId, voice.speakingText])
+  }, [playback, snapshot?.messages, voice.speakingAgentId, voice.speakingText, voice.playbackLevel, voice.playbackState])
 
   const human: HumanPresence = {
     name: 'You',

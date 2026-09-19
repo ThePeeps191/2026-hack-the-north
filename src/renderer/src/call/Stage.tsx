@@ -1,4 +1,4 @@
-import { useState, type JSX } from 'react'
+﻿import { useState, type JSX } from 'react'
 import type {
   Agent,
   ContextRef,
@@ -117,15 +117,10 @@ export function Stage(props: StageProps): JSX.Element {
                   {room.name}
                 </h2>
                 <p className="hs-stage-goal" title={room.goal || 'No goal set for this room'}>
-                  {room.goal ? truncate(room.goal, 160) : 'No goal set for this room yet.'}
+                  {room.goal ? truncate(room.goal, 160) : 'Your team, together in one room.'}
                 </p>
               </div>
               <div className="hs-stage-meta">
-                <Badge tone="muted">{agents.length + 1} in call</Badge>
-                <Badge tone={room.project ? 'plain' : 'wait'}>
-                  {room.project ? (room.project.kind === 'demo' ? 'demo project' : 'project bound') : 'no project'}
-                </Badge>
-                <Badge tone="muted">decision rev {room.decisionRevision}</Badge>
                 <Button
                   variant="ghost"
                   hint="Rename this room or change its goal"
@@ -203,7 +198,7 @@ export function Stage(props: StageProps): JSX.Element {
           integrations={props.integrations}
           speaking={speaking}
           queuedAgentIds={queuedAgentIds}
-          showFilmstrip
+          showFilmstrip onToggleFollow={() => onSetStage({ ...room.stage, follow: !room.stage.follow, pendingHint: null })}
           onSelectSurface={(surface) => onShowShare(mode.owner, surface)}
           onSelectOwner={(owner) => onShowShare(owner, mode.surface)}
           onOpenSpotlight={onOpenSpotlight}
@@ -290,7 +285,7 @@ function SpotlightShell({
       queuedAgentIds={stage.queuedAgentIds}
       now={stage.now}
       onBack={stage.onShowGallery}
-      onSelectSurface={(surface) => stage.onShowShare({ kind: 'agent', agentId: agent.id }, surface)}
+      onSelectSurface={(surface) => stage.onSetStage({ ...room.stage, mode: { kind: 'spotlight', agentId: agent.id, surface } })}
       onSelectAgent={(agentId) => stage.onOpenSpotlight(agentId)}
       onPauseWork={stage.onPauseWork}
       onResumeWork={stage.onResumeWork}
@@ -367,3 +362,4 @@ function RoomEditor({
     </div>
   )
 }
+

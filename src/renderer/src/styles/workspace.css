@@ -1,0 +1,52 @@
+/* Shared workspace surface language. These are intentionally separate from the
+ * call shell: Browser, Code, Terminal and Files can be mounted independently. */
+.ws-surface { height: 100%; min-height: 0; color: var(--text); background: var(--bg-inset); }
+.ws-empty { max-width: 620px; padding: var(--s5, 24px); color: var(--muted); }
+.ws-empty h3 { margin: 0 0 var(--s2, 8px); color: var(--text); font-size: 15px; }
+.ws-empty p + p { margin-top: var(--s2, 8px); }
+.ws-layout { display: grid; grid-template-columns: minmax(200px, 280px) minmax(0, 1fr); height: 100%; min-height: 0; }
+.ws-sidebar { display: grid; min-height: 0; overflow: hidden; background: var(--bg-raised); border-right: 1px solid var(--line); }
+.ws-sidebar__header, .ws-header { display: flex; align-items: center; gap: var(--s2, 8px); min-width: 0; padding: var(--s2, 8px) var(--s3, 12px); background: var(--bg-raised); border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.ws-eyebrow { color: var(--muted); font-size: 11.5px; letter-spacing: .04em; text-transform: uppercase; }
+.ws-spacer { flex: 1; }
+.ws-scroll { min-height: 0; overflow: auto; }
+.ws-tree, .ws-list { list-style: none; margin: 0; padding: 4px; }
+.ws-tree { padding: 0; }
+.ws-tree__item, .ws-job { width: 100%; text-align: left; border-radius: var(--radius-sm, 6px); }
+.ws-tree__item { display: grid; grid-template-columns: 12px minmax(0, 1fr) auto; align-items: center; gap: 6px; padding: 3px 8px; color: var(--muted); font: 12.5px var(--font-mono); }
+.ws-tree__item--dir { font-family: inherit; color: var(--text); }
+.ws-tree__item:hover, .ws-job:hover, .ws-tab:hover { background: var(--bg-hover); }
+.ws-tree__item[aria-current="true"], .ws-job[aria-current="true"], .ws-tab[aria-selected="true"] { color: var(--text); background: var(--accent-soft); outline: 1px solid var(--accent-line); }
+.ws-tree__name, .ws-path { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ws-meta, .ws-note { color: var(--muted); font-size: 11.5px; }
+.ws-control { min-height: 28px; padding: 4px 8px; border: 1px solid var(--line); border-radius: var(--radius-sm, 6px); background: var(--bg-inset); color: var(--text); font: 12px var(--font-mono); }
+.ws-button { min-height: 28px; padding: 3px 9px; border-radius: var(--radius-sm, 6px); color: var(--muted); font-size: 12px; }
+.ws-button:hover { color: var(--text); background: var(--bg-hover); }
+.ws-button--primary { color: var(--accent-text); background: var(--accent); }
+.ws-button--danger, .ws-error { color: var(--danger); }
+.ws-main { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; min-width: 0; min-height: 0; }
+.ws-content { min-height: 0; overflow: auto; background: var(--bg-inset); }
+.ws-state { padding: var(--s4, 16px); color: var(--muted); }
+.ws-state h3 { margin: 0 0 6px; color: var(--text); font-size: 14px; }
+.ws-code { display: grid; grid-template-columns: fit-content(6ch) minmax(0, 1fr); min-height: 100%; font: 12.5px/1.55 var(--font-mono); }
+.ws-code__numbers { padding: 10px 8px 10px 12px; color: var(--muted); text-align: right; user-select: none; }
+.ws-code__text { padding: 10px 12px 10px 0; }
+.ws-code__line { white-space: pre; color: var(--text); }
+.ws-code__line--selected { background: var(--accent-soft); }
+.ws-banner { padding: 6px 12px; background: var(--accent-soft); font-size: 12px; }
+.ws-details { padding: var(--s2, 8px) var(--s3, 12px); border-top: 1px solid var(--line); background: var(--bg-raised); }
+.ws-details summary { color: var(--muted); cursor: pointer; }
+.ws-details p { margin: 6px 0 0; color: var(--muted); font: 11.5px var(--font-mono); overflow-wrap: anywhere; }
+.ws-status--ok { color: var(--ok); } .ws-status--warn { color: var(--warn); } .ws-status--error { color: var(--danger); }
+.ws-files__sidebar { grid-template-rows: auto minmax(0, 1fr); }
+.ws-files__tools { display: grid; gap: 7px; }
+.ws-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.ws-search { display: block; }
+.ws-search .ws-control { box-sizing: border-box; width: 100%; }
+.ws-sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+.ws-tree__state { padding: 6px 12px; color: var(--muted); font-size: 12px; }
+.ws-tree__item { padding-left: calc(8px + var(--ws-tree-indent, 0px)); }
+.ws-tree__glyph, .ws-tree__size { color: var(--muted); }
+.ws-tree__size { font-size: 12px; }
+.ws-mono { font-family: var(--font-mono); font-size: 13px; overflow-wrap: anywhere; }
+@media (max-width: 1100px) { .ws-layout { grid-template-columns: minmax(180px, 230px) minmax(0, 1fr); } }

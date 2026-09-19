@@ -187,23 +187,91 @@ export const METRICS_SCRIPT = String.raw`
 }))()
 `
 
+export const TUNNEL_BYPASS_HEADER = { 'bypass-tunnel-reminder': 'true' } as const
+
+export interface PageTextSnapshot {
+  title: string
+  text: string
+  markup: string
+}
+
+/** Public localtunnel hostnames the remote browser actually has to open. */
+export function looksLikeTunnelUrl(url: string): boolean {
+  try {
+    const host = new URL(url).hostname.toLowerCase()
+    return host === 'loca.lt' || host.endsWith('.loca.lt') || host === 'localtunnel.me' || host.endsWith('.localtunnel.me')
+  } catch {
+    return false
+  }
+}
+
+/**
+ * True when the page is a tunnel's own reminder, not the project's app.
+ * Covers both the older "tunnel password" page and the current
+ * "Tunnel website ahead!" interstitial.
+ */
+export function isTunnelReminderPage(snapshot: PageTextSnapshot): boolean {
+  const title = snapshot.title.toLowerCase()
+  const text = snapshot.text.toLowerCase()
+  const markup = snapshot.markup.toLowerCase()
+  return (
+    title.includes('localtunnel') ||
+    title.includes('tunnel website ahead') ||
+    text.includes('tunnel password') ||
+    text.includes('reminder page') ||
+    text.includes('tunnel website ahead') ||
+    text.includes('served via a tunnel') ||
+    text.includes('served via a localtunnel') ||
+    markup.includes('bypass-tunnel-reminder')
+  )
+}
+
+/** Vite 6+ refuses unknown Host headers with this page instead of the app. */
+export function isViteBlockedHostPage(snapshot: PageTextSnapshot): boolean {
+  const text = snapshot.text.toLowerCase()
+  return text.includes('blocked request') && text.includes('allowedhosts')
+}
+
+/** Labels on the interstitial's continue control, not app buttons. */
+export function tunnelContinueLabel(label: string): boolean {
+  const text = label.trim().toLowerCase()
+  return (
+    text === 'continue' ||
+    text === 'proceed' ||
+    text === 'visit site' ||
+    text === 'continue to site' ||
+    text.includes('click continue')
+  )
+}
+
 /**
  * True when the page the remote browser landed on is a tunnel's own reminder
  * page rather than the project's app. localtunnel answers a plain browser with a
- * "tunnel password" page unless the request carries `bypass-tunnel-reminder`, so
- * Huddle checks for the real signature instead of assuming the preview loaded.
+ * reminder unless the request carries `bypass-tunnel-reminder`, so Huddle checks
+ * for the real signature instead of assuming the preview loaded.
  */
 export const TUNNEL_REMINDER_SCRIPT = String.raw`
 (() => {
   var title = (document.title || '').toLowerCase();
   var text = (document.body ? document.body.innerText || '' : '').toLowerCase();
-  var markup = document.documentElement ? document.documentElement.innerHTML.slice(0, 6000) : '';
+  var markup = document.documentElement ? document.documentElement.innerHTML.slice(0, 6000).toLowerCase() : '';
   return (
     title.indexOf('localtunnel') >= 0 ||
+    title.indexOf('tunnel website ahead') >= 0 ||
     text.indexOf('tunnel password') >= 0 ||
     text.indexOf('reminder page') >= 0 ||
+    text.indexOf('tunnel website ahead') >= 0 ||
+    text.indexOf('served via a tunnel') >= 0 ||
+    text.indexOf('served via a localtunnel') >= 0 ||
     markup.indexOf('bypass-tunnel-reminder') >= 0
   );
+})()
+`
+
+export const VITE_BLOCKED_HOST_SCRIPT = String.raw`
+(() => {
+  var text = (document.body ? document.body.innerText || '' : '').toLowerCase();
+  return text.indexOf('blocked request') >= 0 && text.indexOf('allowedhosts') >= 0;
 })()
 `
 

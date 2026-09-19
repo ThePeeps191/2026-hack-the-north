@@ -1313,7 +1313,7 @@
   background: var(--bg-inset);
 }
 
-.hs-dock-strip {
+.hs-dock-status {
   display: flex;
   align-items: center;
   gap: 14px;
@@ -1531,4 +1531,72 @@
   .hs-gallery {
     grid-template-columns: repeat(auto-fit, minmax(204px, 1fr));
   }
+}
+
+.hs-dock-more { position: relative; display: inline-flex; }
+.hs-dock-more summary { list-style: none; width: 32px; height: 32px; display: grid; place-items: center; border-radius: var(--radius-sm); cursor: pointer; color: var(--muted); }
+.hs-dock-more summary::-webkit-details-marker { display: none; }
+.hs-dock-more summary:hover { color: var(--text); background: var(--bg-hover); }
+.hs-dock-more > div { position: absolute; right: 0; bottom: calc(100% + var(--s2)); z-index: 20; min-width: 160px; display: grid; gap: var(--s1); padding: var(--s2); border: 1px solid var(--line-strong); border-radius: var(--radius-sm); background: var(--bg-raised); box-shadow: var(--shadow); color: var(--muted); font-size: 12px; }
+
+/* Final call-first pass: one calm hierarchy across room, work and focus. */
+.hs-side { flex: 0 0 var(--side-w); width: var(--side-w); padding: var(--s4) var(--s3) var(--s3); gap: var(--s3); background: var(--bg-inset); border-right: 1px solid var(--line); }
+.hs-side-block { border: 0; border-radius: 0; background: transparent; padding: 0; }
+.hs-side-rooms { flex: 0 0 auto; }
+.hs-roomlist { gap: 2px; }
+.hs-roomlist-item { padding: 0; border: 0; }
+.hs-room { padding: 8px; border: 1px solid transparent; border-radius: var(--radius-sm); background: transparent; }
+.hs-room:hover { background: var(--bg-hover); }
+.hs-room.is-selected { background: var(--accent-soft); border-color: transparent; }
+.hs-room-goal, .hs-room-meta { display: none; }
+.hs-side-team { padding: 0; background: transparent; border: 0; gap: 4px; }
+.hs-channel-state { padding: 0 7px; }
+.hs-participants { margin: 0; padding: 0; border: 0; gap: 1px; overflow: visible; }
+.hs-participant.is-human { display: none; }
+.hs-participant-btn { padding: 5px 7px; }
+.hs-project { padding-top: var(--s3); }
+.hs-project-meta { display: none; }
+
+.hs-stage-head { min-height: var(--header-h); align-items: center; padding: 9px var(--s5); }
+.hs-stage-name { font-size: 18px; }
+.hs-stage-meta .hs-badge:nth-child(2), .hs-stage-meta .hs-badge:nth-child(3) { display: none; }
+.hs-gallery { grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); grid-auto-rows: minmax(190px, 1fr); gap: var(--s3); padding: var(--s5); align-content: stretch; }
+.hs-tile { min-height: 190px; border-radius: var(--radius-lg); }
+.hs-tile-main { padding: var(--s4); gap: var(--s3); }
+.hs-tile-name { font-size: 16px; }
+.hs-tile-role { font-size: 12px; }
+.hs-tile-activity { margin-top: var(--s2); font-size: 13px; -webkit-line-clamp: 1; }
+.hs-tile-foot { border-top: 0; padding: 0 var(--s4) var(--s3); min-height: 28px; }
+
+.hs-dock { display: flex; align-items: center; min-height: 54px; padding: 8px var(--s4); gap: var(--s3); overflow-x: auto; }
+.hs-dock-status { display: contents; }
+.hs-dock-mic { width: 112px; }
+.hs-dock-transcript { display: none; }
+.hs-dock-meta { order: 3; margin-left: auto; }
+.hs-dock-count, .hs-dock-queued { display: none; }
+.hs-dock-controls { display: flex; flex: 1 0 auto; padding: 0; gap: var(--s3); justify-content: space-between; }
+.hs-dock-group { gap: 4px; }
+.hs-dock-group--mid { margin-left: auto; }
+
+.hs-composer { padding: var(--s3); }
+.hs-composer-input { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: stretch; gap: var(--s2); }
+.hs-composer-area { min-width: 0; }
+.hs-composer-send { display: flex; flex-direction: column; justify-content: flex-end; gap: var(--s2); }
+.hs-composer-send .hs-btn { min-width: 68px; min-height: var(--control-h); }
+.hs-composer-hint { max-width: 112px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+
+@media (max-width: 1140px) {
+  :root:root { --side-w: 220px; --rail-w: 320px; }
+  .hs-gallery { grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); padding: var(--s4); }
+  .hs-dock-mic { display: none; }
+  .hs-dock { overflow: hidden; gap: var(--s2); }
+  .hs-dock-controls { gap: var(--s2); min-width: 0; }
+  .hs-dock-group { min-width: 0; gap: 2px; }
+  .hs-dock-group--mid { margin-left: 0; }
+  .hs-addagent .hs-btn { width: 32px; height: 32px; padding: 0; overflow: hidden; }
+  .hs-addagent .hs-btn-inner { font-size: 0; }
+  .hs-addagent .hs-btn-inner svg { flex: 0 0 auto; }
+  .hs-dock-meta { display: none; }
+  .hs-composer-hint { font-size: 0; max-width: none; }
+  .hs-composer-hint::after { content: 'Enter to send'; font-size: 11px; }
 }

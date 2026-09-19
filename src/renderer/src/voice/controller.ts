@@ -24,6 +24,7 @@ import { PLAYBACK_SAMPLE_RATE } from '../../../shared/voice.ts'
 import type { VoiceController, VoiceUiState } from './index.ts'
 import { VoicePlayback, type PlaybackReport } from './playback.ts'
 import { startCapture, type CaptureHandle } from './capture.ts'
+import { selectOutputDevice } from './devices.ts'
 
 /** The slice of the preload API this controller depends on. */
 export interface VoiceChannel {
@@ -47,6 +48,7 @@ export interface VoiceControllerOptions {
   now?: () => number
   /** Worklet url, defaults to /capture-processor.js. */
   workletUrl?: string
+  loadDevices?: () => Promise<{ inputDeviceId: string | null; outputDeviceId: string | null }>
 }
 
 /** Local mic level above which we consider the human to be talking. */
@@ -60,6 +62,7 @@ export function createController(options: VoiceControllerOptions): VoiceControll
 
   const state: VoiceUiState = {
     micLevel: 0,
+    playbackLevel: 0,
     speaking: false,
     captureState: 'off',
     playbackState: 'idle',
@@ -78,6 +81,7 @@ export function createController(options: VoiceControllerOptions): VoiceControll
   let lastVoiceAt = 0
   let unsubscribeServer: (() => void) | null = null
   let unsubscribeChunk: (() => void) | null = null
+  let meter: ReturnType<typeof setInterval> | null = null
 
   const playback = new VoicePlayback({
     now,
@@ -100,6 +104,10 @@ export function createController(options: VoiceControllerOptions): VoiceControll
         state.speakingAgentId = info.agentId
         state.speakingText = info.text
         state.queuedAgentIds = state.queuedAgentIds.filter((agentId) => agentId !== info.agentId)
+        if (!meter) meter = setInterval(() => {
+          state.playbackLevel = playback.outputLevel()
+          emit()
+        }, 50)
         emit()
       },
       onDrained: (info) => {
@@ -152,6 +160,9 @@ export function createController(options: VoiceControllerOptions): VoiceControll
     if (state.speakingAgentId !== info.agentId) return
     state.speakingAgentId = null
     state.speakingText = ''
+    state.playbackLevel = 0
+    if (meter) clearInterval(meter)
+    meter = null
   }
 
   function setCaptureState(next: VoiceUiState['captureState'], error: string | null = null): void {
@@ -217,6 +228,9 @@ export function createController(options: VoiceControllerOptions): VoiceControll
     setCaptureState('starting')
     emit()
     try {
+      const devices = await options.loadDevices?.()
+      if (!playbackContext) playbackContext = (options.createAudioContext ?? defaultCreateContext)(PLAYBACK_SAMPLE_RATE)
+      await selectOutputDevice(playbackContext as AudioContext & { setSinkId?: (id: string) => Promise<void> }, devices?.outputDeviceId ?? null)
       // Capture uses the device's own rate (clean microphone capture); playback
       // uses PLAYBACK_SAMPLE_RATE.
       if (!captureContext) captureContext = newCaptureContext()
@@ -225,7 +239,7 @@ export function createController(options: VoiceControllerOptions): VoiceControll
       unsubscribeChunk = channel.onAudioChunk(handleAudioChunk)
       capture = await startCapture({
         context: captureContext,
-        deviceId: null,
+        deviceId: devices?.inputDeviceId ?? null,
         ...(options.workletUrl ? { workletUrl: options.workletUrl } : {}),
         ...(options.mediaDevices ? { mediaDevices: options.mediaDevices } : {}),
         now,
@@ -264,10 +278,14 @@ export function createController(options: VoiceControllerOptions): VoiceControll
       setPlaybackState('idle')
       setCaptureState('error', error instanceof Error ? error.message : String(error))
       emit()
+      await channel.stop().catch(() => undefined)
+      throw error
     }
   }
 
   async function stop(): Promise<void> {
+    if (meter) clearInterval(meter)
+    meter = null
     unsubscribe()
     capture?.stop()
     capture = null
@@ -281,6 +299,7 @@ export function createController(options: VoiceControllerOptions): VoiceControll
     started = false
     micMuted = false
     state.micLevel = 0
+    state.playbackLevel = 0
     state.speaking = false
     state.speakingAgentId = null
     state.speakingText = ''
@@ -339,6 +358,8 @@ export function createController(options: VoiceControllerOptions): VoiceControll
       }
     },
     dispose(): void {
+      if (meter) clearInterval(meter)
+      meter = null
       unsubscribe()
       capture?.stop()
       capture = null

@@ -11,7 +11,7 @@ import {
   retainedTeamMessages,
   teamWorkspace
 } from './derive'
-import { refOwner, surfaceLabel } from './format'
+import { surfaceLabel } from './format'
 import { Rail, type RailTab } from './Rail'
 import { SettingsDialog } from './SettingsDialog'
 import { Sidebar } from './Sidebar'
@@ -103,6 +103,7 @@ export function CallShell(props: CallScreenProps): JSX.Element {
     })
     setRailOpen(true)
     if (tab !== 'chat' && tab !== 'ask') setTab('chat')
+    setFocusToken((token) => token + 1)
   }
 
   const send = (): void => {
@@ -114,12 +115,17 @@ export function CallShell(props: CallScreenProps): JSX.Element {
     if (refs.length > 0) options.refs = refs
     if (replyToId) options.replyToId = replyToId
     if (privateTo) options.privateTo = privateTo
-    void actions.sendMessage(text, options).finally(() => {
-      setSending(false)
-      setBody('')
-      setRefs([])
-      setReplyToId(null)
-    })
+    void actions
+      .sendMessage(text, options)
+      .then(() => {
+        setBody('')
+        setRefs([])
+        setReplyToId(null)
+      })
+      .catch(() => {
+        // The action publishes the failure; retain the entire draft for retry.
+      })
+      .finally(() => setSending(false))
   }
 
   const composer: ComposerModel = {
@@ -147,7 +153,12 @@ export function CallShell(props: CallScreenProps): JSX.Element {
   }
 
   const openRef = (ref: ContextRef, surface: ShareSurface): void => {
-    void actions.showShare(refOwner(ref, agents), surface)
+    if (ref.kind === 'task' || ref.kind === 'decision') {
+      setRailOpen(true)
+      setTab(ref.kind === 'task' ? 'work' : 'decisions')
+      return
+    }
+    props.onOpenRef(ref, surface)
   }
 
   const openSpotlight = (agentId: string): void => {
@@ -353,8 +364,8 @@ export function CallShell(props: CallScreenProps): JSX.Element {
           project={room.project}
           now={now}
           onClose={() => setSettingsOpen(false)}
-          onUpdate={(patch) => void actions.updateSettings(patch)}
-          onSetSecret={(key, value) => void actions.setSecret(key, value)}
+          onUpdate={(patch) => actions.updateSettings(patch)}
+          onSetSecret={(key, value) => actions.setSecret(key, value)}
           onRefreshCapabilities={() => void actions.refreshCapabilities()}
           onPreviewVoice={(voiceId) => void actions.previewVoice(voiceId)}
           onSetAgentVoice={(agentId, voiceId) => void actions.setAgentVoice(agentId, voiceId)}

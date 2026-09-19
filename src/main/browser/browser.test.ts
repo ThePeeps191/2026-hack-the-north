@@ -13,11 +13,16 @@ import { createBrowserHost } from './index.ts'
 import { requireCredentials } from './credentials.ts'
 import { NetworkRecorder } from './network.ts'
 import {
+  isTunnelReminderPage,
+  isViteBlockedHostPage,
+  looksLikeTunnelUrl,
   planStrokes,
   pngSize,
   readObservation,
   summarizeObservation,
-  toObservation
+  toObservation,
+  TUNNEL_REMINDER_SCRIPT,
+  tunnelContinueLabel
 } from './page-scripts.ts'
 import { checkRemoteTarget } from './targets.ts'
 
@@ -476,5 +481,72 @@ describe('restart reconciliation', () => {
     assert.equal(notices.length, 1)
     assert.equal(notices[0].level, 'warn')
     await host.dispose()
+  })
+})
+
+describe('tunnel reminder detection', () => {
+  test('recognises the current localtunnel interstitial title', () => {
+    assert.equal(
+      isTunnelReminderPage({
+        title: 'Tunnel website ahead!',
+        text: 'This website is served via a tunnel. Continue to visit the site.',
+        markup: '<html><head><title>Tunnel website ahead!</title></head></html>'
+      }),
+      true
+    )
+  })
+
+  test('recognises the older tunnel password reminder', () => {
+    assert.equal(
+      isTunnelReminderPage({
+        title: 'localtunnel',
+        text: 'Tunnel Password. This is a reminder page.',
+        markup: '<meta name="bypass-tunnel-reminder">'
+      }),
+      true
+    )
+  })
+
+  test('does not treat a real app page as a tunnel notice', () => {
+    assert.equal(
+      isTunnelReminderPage({
+        title: 'Sketch Night',
+        text: 'Draw a sketch. Vote anonymously.',
+        markup: '<div id="root">Sketch Night</div>'
+      }),
+      false
+    )
+  })
+
+  test('recognises a Vite blocked-host refusal', () => {
+    assert.equal(
+      isViteBlockedHostPage({
+        title: '',
+        text: 'Blocked request. This host ("abc.loca.lt") is not allowed.\nTo allow this host, add "abc.loca.lt" to server.allowedHosts in vite.config.js.',
+        markup: ''
+      }),
+      true
+    )
+    assert.equal(
+      isViteBlockedHostPage({
+        title: 'Sketch Night',
+        text: 'Draw a sketch.',
+        markup: ''
+      }),
+      false
+    )
+  })
+
+  test('matches public tunnel hostnames and continue-button labels', () => {
+    assert.equal(looksLikeTunnelUrl('https://huddle-room.loca.lt'), true)
+    assert.equal(looksLikeTunnelUrl('https://demo.localtunnel.me/'), true)
+    assert.equal(looksLikeTunnelUrl('https://example.com/app'), false)
+    assert.equal(tunnelContinueLabel('Continue'), true)
+    assert.equal(tunnelContinueLabel('Click Continue'), true)
+    assert.equal(tunnelContinueLabel('Vote'), false)
+  })
+
+  test('the in-page detector still matches the current interstitial title', () => {
+    assert.match(TUNNEL_REMINDER_SCRIPT, /tunnel website ahead/)
   })
 })

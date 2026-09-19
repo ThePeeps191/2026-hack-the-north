@@ -24,6 +24,8 @@ export interface SurfaceProps {
   agent: Agent | null
   /** True when the human may run things here (Team workspace). */
   editable: boolean
+  /** A clicked reference, including a token so clicking it again refocuses it. */
+  openReference?: { ref: ContextRef; token: number }
   /** Attach a reference to the composer: code span, screenshot region, job line. */
   onAttachRef: (ref: ContextRef) => void
   /** Follow a reference to wherever it lives. */

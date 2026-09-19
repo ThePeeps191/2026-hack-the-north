@@ -21,7 +21,9 @@
     "ui-check": "node --experimental-transform-types scripts/ui-check.ts",
     "demo-run": "node --experimental-transform-types scripts/demo-run.ts",
     "start": "electron-vite preview",
-    "check": "npm run typecheck && npm test"
+    "check": "npm run typecheck && npm test",
+    "demo:check": "node scripts/demo-preflight.mjs",
+    "demo:start": "npm run build && electron . --remote-debugging-port=9222"
   },
   "dependencies": {
     "@browserbasehq/sdk": "^2.20.0",

@@ -12,7 +12,7 @@ import { Badge, Button, IconButton } from './ui'
  *
  * Enter sends, Shift+Enter adds a line, `@` names a teammate, and every chip in
  * the draft comes from a real reference or the reply target. Sending is the only
- * thing this component does — the text lives in the shell so other panels can
+ * thing this component does - the text lives in the shell so other panels can
  * prefill it.
  */
 
@@ -261,8 +261,8 @@ export function Composer({ model, agents }: ComposerProps): JSX.Element {
           value={model.body}
           placeholder={
             model.privateTo && spotlightAgent
-              ? `Message ${spotlightAgent.name} privately…`
-              : 'Say something to the room…'
+              ? `Message ${spotlightAgent.name} privately...`
+              : 'Say something to the room...'
           }
           aria-label="Message"
           onChange={(event) => {
@@ -276,7 +276,7 @@ export function Composer({ model, agents }: ComposerProps): JSX.Element {
         />
         <div className="hs-composer-send">
           <span className="hs-composer-hint" title="Enter sends, Shift+Enter adds a line">
-            Enter sends · Shift+Enter = new line · @ names a teammate
+            Enter to send
           </span>
           <Button
             variant="primary"
@@ -284,15 +284,15 @@ export function Composer({ model, agents }: ComposerProps): JSX.Element {
             disabled={sendDisabled}
             hint={sendReason ?? 'Sends to the room. Teammates reply out loud as well.'}
           >
-            {model.sending ? 'Sending…' : 'Send'}
+            {model.sending ? 'Sending...' : 'Send'}
           </Button>
         </div>
       </div>
 
       {model.privateTo && spotlightAgent ? (
         <p className="hs-composer-note">
-          <LockIcon size={12} /> Private to {spotlightAgent.name}. Room messages continue on the
-          stage transcript.
+          <LockIcon size={12} /> Private conversation with {spotlightAgent.name}. Any project work
+          created from this conversation is shared with the team.
         </p>
       ) : null}
       {!model.privateTo && spotlightAgent ? (
@@ -303,3 +303,4 @@ export function Composer({ model, agents }: ComposerProps): JSX.Element {
     </div>
   )
 }
+

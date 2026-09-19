@@ -142,6 +142,7 @@ export interface CallScreenProps {
   /** Non-fatal action error to surface inline. */
   error: string | null
   actions: CallActions
+  onOpenRef: (ref: ContextRef, surface?: ShareSurface) => void
   /**
    * Renders the real workspace surface. Supplied by the integration lead and
    * backed by the execution and browser modules. The call UI provides the frame

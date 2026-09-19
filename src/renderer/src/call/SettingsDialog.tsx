@@ -30,7 +30,6 @@ const SECRET_FIELDS: Array<{ key: string; label: string; hint: string }> = [
     label: 'Browserbase project id',
     hint: 'The project that browser sessions are created in.'
   },
-  { key: 'NGROK_AUTHTOKEN', label: 'ngrok authtoken', hint: 'Only needed for tunneled previews.' }
 ]
 
 const STATE_TONES: Record<CapabilityState, Tone | 'accent' | 'muted'> = {
@@ -48,8 +47,8 @@ export interface SettingsDialogProps {
   project: ProjectBinding | null
   now: number
   onClose: () => void
-  onUpdate: (patch: Partial<AppSettings>) => void
-  onSetSecret: (key: string, value: string) => void
+  onUpdate: (patch: Partial<AppSettings>) => Promise<void>
+  onSetSecret: (key: string, value: string) => Promise<void>
   onRefreshCapabilities: () => void
   onPreviewVoice: (voiceId: string) => void
   onSetAgentVoice: (agentId: string, voiceId: string) => void
@@ -77,6 +76,8 @@ export function SettingsDialog({
   const [draft, setDraft] = useState<AppSettings>(settings)
   const [secretDraft, setSecretDraft] = useState<Record<string, string>>({})
   const [savedAt, setSavedAt] = useState<number | null>(null)
+  const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState<string | null>(null)
 
   const patchVoice = (patch: Partial<AppSettings['voice']>): void =>
     setDraft((current) => ({ ...current, voice: { ...current.voice, ...patch } }))
@@ -103,7 +104,9 @@ export function SettingsDialog({
       footer={
         <>
           <span className="hs-settings-foot">
-            {savedAt ? (
+            {saveError ? (
+              <Badge tone="stop">{saveError}</Badge>
+            ) : savedAt ? (
               <Badge tone="done">saved {formatRelative(new Date(savedAt).toISOString(), now)}</Badge>
             ) : dirty ? (
               <Badge tone="wait">unsaved changes</Badge>
@@ -114,7 +117,7 @@ export function SettingsDialog({
           <span className="hs-settings-foot-actions">
             <Button
               variant="ghost"
-              disabled={!dirty}
+              disabled={!dirty || saving}
               hint={dirty ? 'Discards your edits' : 'Nothing has been changed yet'}
               onClick={() => setDraft(settings)}
             >
@@ -125,11 +128,19 @@ export function SettingsDialog({
               disabled={!dirty}
               hint={dirty ? 'Writes these settings to the room' : 'Nothing has been changed yet'}
               onClick={() => {
-                onUpdate(draft)
-                setSavedAt(Date.now())
+                setSaving(true)
+                void onUpdate(draft)
+                  .then(() => {
+                    setSaveError(null)
+                    setSavedAt(Date.now())
+                  })
+                  .catch((error: unknown) => {
+                    setSaveError(error instanceof Error ? error.message : 'Could not save settings')
+                  })
+                  .finally(() => setSaving(false))
               }}
             >
-              Save settings
+              {saving ? 'Saving…' : 'Save settings'}
             </Button>
           </span>
         </>
@@ -423,8 +434,8 @@ export function SettingsDialog({
       <section className="hs-settings-section" aria-label="API keys">
         <SectionLabel>API keys</SectionLabel>
         <p className="hs-settings-hint">
-          Keys are stored by the desktop app itself and are never shown again. Leave a field empty to
-          clear it.
+          Keys are stored by the desktop app and are never shown again. A blank field leaves the
+          existing value unchanged.
         </p>
         <ul className="hs-secrets">
           {SECRET_FIELDS.map((field) => (
@@ -457,8 +468,14 @@ export function SettingsDialog({
                 onClick={() => {
                   const value = secretDraft[field.key] ?? ''
                   if (!value) return
-                  onSetSecret(field.key, value)
-                  setSecretDraft((current) => ({ ...current, [field.key]: '' }))
+                  void onSetSecret(field.key, value)
+                    .then(() => {
+                      setSaveError(null)
+                      setSecretDraft((current) => ({ ...current, [field.key]: '' }))
+                    })
+                    .catch((error: unknown) => {
+                      setSaveError(error instanceof Error ? error.message : 'Could not save key')
+                    })
                 }}
               >
                 Save

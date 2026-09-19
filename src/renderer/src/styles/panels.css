@@ -629,18 +629,7 @@
   padding: 10px 12px 12px;
 }
 
-.hs-rail > .hs-sectionlabel {
-  padding: 2px 14px 0;
-}
 
-.hs-rail-note {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  color: var(--muted);
-  font-size: 11.5px;
-  margin-bottom: 10px;
-}
 
 /* ------------------------------------------------------------------ *
  * Chat

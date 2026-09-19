@@ -66,14 +66,18 @@ export function Decisions({
     } = { title: title.trim(), statement: statement.trim() }
     if (rationale.trim()) input.rationale = rationale.trim()
     if (supersedesId) input.supersedesId = supersedesId
-    void Promise.resolve(onRecord(input)).then(() => {
-      setBusy(false)
-      setTitle('')
-      setStatement('')
-      setRationale('')
-      setSupersedesId('')
-      setOpen(false)
-    })
+    void Promise.resolve(onRecord(input))
+      .then(() => {
+        setTitle('')
+        setStatement('')
+        setRationale('')
+        setSupersedesId('')
+        setOpen(false)
+      })
+      .catch(() => {
+        // The shell surfaces the error. Preserve the decision for correction or retry.
+      })
+      .finally(() => setBusy(false))
   }
 
   return (

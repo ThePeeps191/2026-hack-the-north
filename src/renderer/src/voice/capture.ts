@@ -32,7 +32,7 @@ export interface CaptureInput {
 }
 
 export const CAPTURE_WORKLET_NAME = 'huddle-capture'
-export const CAPTURE_WORKLET_URL = '/capture-processor.js'
+export const CAPTURE_WORKLET_URL = './capture-processor.js'
 
 export async function startCapture(input: CaptureInput): Promise<CaptureHandle> {
   const mediaDevices = input.mediaDevices ?? navigator.mediaDevices

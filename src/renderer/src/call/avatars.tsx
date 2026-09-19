@@ -23,7 +23,7 @@ export interface AvatarProps {
 export function AvatarMark({ avatar, color, size = 40, className, dim }: AvatarProps): JSX.Element {
   const raw = useId()
   const clipId = `hs-av-${raw.replace(/[^a-zA-Z0-9_-]/g, '')}`
-  const opacity = dim ? 0.5 : 1
+  const opacity = dim ? 0.9 : 1
 
   return (
     <svg
@@ -47,15 +47,15 @@ export function AvatarMark({ avatar, color, size = 40, className, dim }: AvatarP
           <circle cx="24" cy="24" r="22.4" />
         </clipPath>
       </defs>
-      <circle cx="24" cy="24" r="22.4" fill={color} fillOpacity="0.09" />
+      <circle cx="24" cy="24" r="22.4" fill={color} fillOpacity="0.24" />
       <circle
         cx="24"
         cy="24"
         r="22.4"
         fill="none"
         stroke={color}
-        strokeOpacity="0.33"
-        strokeWidth="1.2"
+        strokeOpacity="0.15"
+        strokeWidth="1.5"
       />
       <g clipPath={`url(#${clipId})`}>{mark(avatar, color)}</g>
     </svg>
@@ -70,7 +70,7 @@ function mark(key: string, color: string): JSX.Element {
           <path
             d="M24 12.6L34.4 31.2H13.6z"
             fill={color}
-            fillOpacity="0.16"
+            fillOpacity="0.9"
             stroke={color}
             strokeOpacity="0.85"
             strokeWidth="1.7"

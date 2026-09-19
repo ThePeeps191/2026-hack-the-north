@@ -13,6 +13,8 @@ import { createController } from './controller.ts'
 export interface VoiceUiState {
   /** Truthful microphone level 0..1, ~20 Hz, never persisted. */
   micLevel: number
+  /** RMS measured from the playback output graph, 0..1. */
+  playbackLevel: number
   /**
    * True while the local microphone indicates human speech (level above a small
    * threshold, with a short hangover). Agent audio is reflected by
@@ -48,5 +50,19 @@ export interface VoiceController {
 
 /** The only way the call UI is meant to obtain a controller. */
 export function createVoiceController(): VoiceController {
-  return createController({ channel: window.huddle.voice })
+  let joinedRoom: string | null = null
+  return createController({ loadDevices: async () => (await window.huddle.getSnapshot()).settings.voice, channel: {
+    ...window.huddle.voice,
+    start: async (roomId) => {
+      joinedRoom = roomId
+      await window.huddle.joinCall(roomId)
+      const state = await window.huddle.getSnapshot()
+      if (state.call.connection === 'error') throw new Error(state.call.error ?? 'Local speech could not start.')
+    },
+    stop: async () => {
+      const roomId = joinedRoom
+      joinedRoom = null
+      if (roomId) await window.huddle.leaveCall(roomId)
+    }
+  } })
 }

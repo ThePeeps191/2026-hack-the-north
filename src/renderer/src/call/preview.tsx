@@ -271,6 +271,7 @@ export function buildMockProps(scenario: PreviewScenario = 'meeting'): CallScree
     notices,
     error: scenario === 'quiet' ? 'Speech is unavailable: no ElevenLabs key is stored.' : null,
     actions: mockActions(),
+    onOpenRef: () => {},
     renderSurface: (args) => (
       <div className="hs-preview-surface">
         <p className="hs-preview-surface-title">
