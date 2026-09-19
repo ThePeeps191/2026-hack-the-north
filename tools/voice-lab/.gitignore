@@ -1,0 +1,16 @@
+node_modules/
+dist/
+.venv/
+.env
+*.tsbuildinfo
+.cache/
+models/*.onnx
+models/*.bin
+models/*.pt
+python/__pycache__/
+coverage/
+.vitest/
+*.log
+.DS_Store
+Thumbs.db
+tmp/

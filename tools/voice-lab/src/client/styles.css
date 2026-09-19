@@ -1,0 +1,199 @@
+:root {
+  color-scheme: dark;
+  --bg: #121214;
+  --panel: #1b1b1f;
+  --line: #2c2c32;
+  --text: #f3f3f0;
+  --muted: #9a9aa3;
+  --accent: #c9a227;
+  --danger: #d46a6a;
+  --ok: #7dba6a;
+  font-family: "Segoe UI", "Helvetica Neue", sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.app {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 32px 20px 64px;
+}
+
+.eyebrow {
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  font-size: 11px;
+  color: var(--accent);
+  margin: 0 0 8px;
+}
+
+h1,
+h2 {
+  font-weight: 600;
+  margin: 0 0 8px;
+}
+
+h1 {
+  font-size: 28px;
+}
+
+h2 {
+  font-size: 15px;
+}
+
+.lede,
+.muted {
+  color: var(--muted);
+}
+
+.lede {
+  margin: 0;
+  line-height: 1.45;
+}
+
+.status-row {
+  margin: 24px 0;
+}
+
+.status {
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.status[data-state="loading"] {
+  color: var(--accent);
+}
+
+.status[data-state="ready"] {
+  color: var(--ok);
+}
+
+.status[data-state="error"] {
+  color: var(--danger);
+}
+
+.panel {
+  border: 1px solid var(--line);
+  background: var(--panel);
+  padding: 16px;
+  margin-bottom: 16px;
+}
+
+.row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+button,
+select,
+textarea {
+  font: inherit;
+  color: var(--text);
+  background: #101012;
+  border: 1px solid var(--line);
+  padding: 8px 12px;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+button:not(:disabled):hover {
+  border-color: var(--accent);
+}
+
+button.danger:not(:disabled) {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.pill {
+  font-size: 12px;
+  border: 1px solid var(--line);
+  padding: 4px 8px;
+  color: var(--muted);
+}
+
+.pill.hot {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.meter {
+  margin-top: 12px;
+  height: 8px;
+  background: #101012;
+  border: 1px solid var(--line);
+}
+
+.meter-fill {
+  height: 100%;
+  width: 0%;
+  background: var(--accent);
+}
+
+.transcript {
+  min-height: 120px;
+  line-height: 1.5;
+}
+
+.transcript p {
+  margin: 0 0 8px;
+}
+
+.transcript .provisional {
+  color: var(--muted);
+  font-style: italic;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 10px 0;
+}
+
+textarea,
+select {
+  width: 100%;
+}
+
+.timing {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  margin: 0;
+}
+
+.timing dt {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.timing dd {
+  margin: 4px 0 0;
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 640px) {
+  .timing {
+    grid-template-columns: 1fr;
+  }
+}

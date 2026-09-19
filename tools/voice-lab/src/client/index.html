@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Huddle Voice Lab</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="app">
+      <header>
+        <p class="eyebrow">Huddle</p>
+        <h1>Voice lab</h1>
+        <p class="lede">
+          Local microphone transcription and barge-in. ElevenLabs is used only to speak typed agent
+          text. Use headphones first.
+        </p>
+      </header>
+
+      <section class="status-row">
+        <p id="status" class="status" data-state="loading">Connecting…</p>
+        <p id="stt-info" class="muted"></p>
+      </section>
+
+      <section class="panel">
+        <h2>Microphone</h2>
+        <div class="row">
+          <button id="mic-start" type="button">Start mic</button>
+          <button id="mic-stop" type="button" disabled>Stop mic</button>
+          <span id="vad-pill" class="pill">quiet</span>
+        </div>
+        <div class="meter" aria-label="Input level">
+          <div id="level" class="meter-fill"></div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Live transcript</h2>
+        <div id="transcript" class="transcript" aria-live="polite">
+          <p class="muted">Start the microphone to transcribe locally.</p>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Agent reply</h2>
+        <label class="field">
+          <span>Text</span>
+          <textarea id="speak-text" rows="4" placeholder="Maya: I’ll open App.tsx and check the layout."></textarea>
+        </label>
+        <label class="field">
+          <span>Voice</span>
+          <select id="voice"></select>
+        </label>
+        <div class="row">
+          <button id="speak" type="button">Speak</button>
+          <button id="stop" type="button" class="danger" disabled>Stop</button>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Timing</h2>
+        <dl class="timing">
+          <div>
+            <dt>Interruption</dt>
+            <dd id="t-interrupt">—</dd>
+          </div>
+          <div>
+            <dt>Final transcript</dt>
+            <dd id="t-final">—</dd>
+          </div>
+          <div>
+            <dt>First audible speech</dt>
+            <dd id="t-audible">—</dd>
+          </div>
+        </dl>
+      </section>
+    </main>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>
