@@ -1,7 +1,9 @@
-export {}
+import type { HuddleApi } from '../shared/api'
 
 declare global {
   interface Window {
-    huddle: Record<string, never>
+    huddle: HuddleApi
   }
 }
+
+export {}

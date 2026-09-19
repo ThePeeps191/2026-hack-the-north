@@ -9,7 +9,8 @@
     "preview": "electron-vite preview",
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json --composite false",
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json --composite false",
-    "typecheck": "npm run typecheck:node && npm run typecheck:web"
+    "typecheck": "npm run typecheck:node && npm run typecheck:web",
+    "test": "node --experimental-strip-types --test src/main/*.test.ts"
   },
   "dependencies": {
     "react": "^19.2.1",
