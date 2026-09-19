@@ -81,21 +81,24 @@ function fromV1(raw: Record<string, unknown>, notes: string[]): PersistedState {
 
   const rooms: Room[] = asArray(raw.rooms)
     .filter(isRecord)
-    .map((room) => {
+    .map((room): Room | null => {
       const id = str(room.id)
       if (!id) return null
-      return {
+      const migrated: Room = {
         id,
         name: clamp(str(room.name) || 'Room', MAX_ROOM_NAME),
         // v1 called this `description`; it was used as the project goal.
         goal: clamp(str(room.description), MAX_ROOM_GOAL),
         createdAt: str(room.createdAt) || now,
         updatedAt: str(room.updatedAt) || now,
+        // v1's workspace tab selection is presentation, not state: a migrated
+        // room opens on the gallery with Follow on, like a fresh room.
         stage: { mode: { kind: 'gallery' }, follow: true, pendingHint: null },
         project: null,
         joined: false,
         decisionRevision: 0
-      } satisfies Room
+      }
+      return migrated
     })
     .filter((room): room is Room => room !== null)
 

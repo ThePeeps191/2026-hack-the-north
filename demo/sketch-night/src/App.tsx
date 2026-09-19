@@ -105,6 +105,8 @@ export function App() {
             <DrawBoard
               prompt={game.state?.prompt ?? null}
               submitted={game.submitted}
+              submittedCount={game.state?.sketches.length ?? 0}
+              playerCount={connectedPlayers.length}
               onSubmit={game.submitSketch}
             />
           ) : null}
@@ -113,6 +115,9 @@ export function App() {
             <section className="panel">
               <h2>Draw</h2>
               <p className="hint">Join the room to draw this round.</p>
+              <p className="hint" data-testid="submit-progress">
+                {game.state?.sketches.length ?? 0} of {connectedPlayers.length} sketches in
+              </p>
             </section>
           ) : null}
 
@@ -120,7 +125,7 @@ export function App() {
             <VoteGallery
               sketches={game.state?.sketches ?? []}
               youId={game.youId}
-              voting
+              voting={joined}
               votedSketchId={game.votedSketchId}
               onVote={game.vote}
             />

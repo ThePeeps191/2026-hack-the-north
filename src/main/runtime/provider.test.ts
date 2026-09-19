@@ -1,0 +1,189 @@
+import assert from 'node:assert/strict'
+import { describe, test } from 'node:test'
+import { HuddleError } from '../huddle-error.ts'
+import {
+  createDeadline,
+  createDefaultProvider,
+  looksLikeTransportMismatch,
+  OpenAiProviderAdapter,
+  toChatMessages,
+  toChatTools,
+  toProviderError,
+  toResponsesInput,
+  toResponsesTools
+} from './provider.ts'
+import type { ProviderInputItem, ProviderToolDefinition } from './provider.ts'
+
+const TOOL: ProviderToolDefinition = {
+  name: 'read_file',
+  description: 'Read a file',
+  parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] }
+}
+
+function apiError(status: number, message: string): Error {
+  const error = new Error(message)
+  Object.assign(error, { status })
+  return error
+}
+
+describe('request building', () => {
+  test('text and tool items map to the Responses input shape', () => {
+    const items: ProviderInputItem[] = [
+      { kind: 'text', role: 'user', content: 'do it' },
+      { kind: 'call', callId: 'call_1', name: 'read_file', arguments: '{"path":"a.ts"}' },
+      { kind: 'result', callId: 'call_1', name: 'read_file', output: 'ok' }
+    ]
+    assert.deepEqual(toResponsesInput(items), [
+      { role: 'user', content: 'do it' },
+      { type: 'function_call', call_id: 'call_1', name: 'read_file', arguments: '{"path":"a.ts"}' },
+      { type: 'function_call_output', call_id: 'call_1', output: 'ok' }
+    ])
+  })
+
+  test('chat messages fold instructions and merge consecutive tool calls', () => {
+    const items: ProviderInputItem[] = [
+      { kind: 'text', role: 'user', content: 'go' },
+      { kind: 'call', callId: 'c1', name: 'read_file', arguments: '{}' },
+      { kind: 'call', callId: 'c2', name: 'list_files', arguments: '{}' },
+      { kind: 'result', callId: 'c1', name: 'read_file', output: 'a' },
+      { kind: 'result', callId: 'c2', name: 'list_files', output: 'b' }
+    ]
+    const messages = toChatMessages('Be terse.', items)
+    assert.deepEqual(
+      messages.map((message) => message.role),
+      ['user', 'assistant', 'tool', 'tool']
+    )
+    assert.match(JSON.stringify(messages[0]), /Be terse/)
+    const toolCalls = messages.flatMap((message) =>
+      message.role === 'assistant' ? message.tool_calls ?? [] : []
+    )
+    assert.equal(toolCalls.length, 2)
+    assert.deepEqual(
+      toolCalls.map((call) => call.function.name),
+      ['read_file', 'list_files']
+    )
+  })
+
+  test('tool definitions carry the schema to both transports', () => {
+    const responses = toResponsesTools([TOOL])
+    assert.equal(responses[0].type, 'function')
+    assert.equal(responses[0].name, 'read_file')
+    assert.equal(responses[0].strict, false)
+    const chat = toChatTools([TOOL])
+    assert.equal(chat[0].function.name, 'read_file')
+    assert.deepEqual(chat[0].function.parameters, TOOL.parameters)
+  })
+})
+
+describe('provider errors', () => {
+  test('an auth failure explains what to do', () => {
+    const error = toProviderError(apiError(401, 'invalid api key'), 'building the plan')
+    assert.ok(error instanceof HuddleError)
+    assert.equal(error.code, 'openai_auth')
+    assert.match(error.message, /rejected the API key/)
+    assert.match(error.fix ?? '', /OPENAI_API_KEY/)
+  })
+
+  test('a missing model is reported as a model problem, not a network problem', () => {
+    const error = toProviderError(apiError(404, 'The model does not exist'), 'turn 3')
+    assert.equal(error.code, 'openai_model_unavailable')
+    assert.match(error.fix ?? '', /model/i)
+  })
+
+  test('rate limits and server faults are distinct', () => {
+    assert.equal(toProviderError(apiError(429, 'slow down'), 'turn 1').code, 'openai_rate_limited')
+    assert.equal(toProviderError(apiError(503, 'upstream'), 'turn 1').code, 'openai_unavailable')
+  })
+
+  test('a bad request keeps the provider message for the human', () => {
+    const error = toProviderError(apiError(400, 'tools: too many'), 'turn 2')
+    assert.equal(error.code, 'openai_bad_request')
+    assert.match(error.message, /tools: too many/)
+  })
+
+  test('a plain network error is reported as unreachable', () => {
+    const error = toProviderError(new Error('fetch failed: ECONNREFUSED'), 'turn 1')
+    assert.ok(['openai_error', 'openai_unreachable'].includes(error.code))
+    assert.match(error.message, /ECONNREFUSED/)
+  })
+
+  test('an existing HuddleError is passed through unchanged', () => {
+    const original = new HuddleError('openai_missing', 'no key', 'add one')
+    assert.equal(toProviderError(original, 'anything'), original)
+  })
+
+  test('transport mismatch detection is narrow', () => {
+    assert.equal(looksLikeTransportMismatch(apiError(404, 'Not Found: /v1/responses')), true)
+    assert.equal(looksLikeTransportMismatch(apiError(400, 'unsupported_parameter: max_output_tokens')), true)
+    assert.equal(looksLikeTransportMismatch(apiError(400, 'invalid request: tool schema')), false)
+    assert.equal(looksLikeTransportMismatch(apiError(500, 'not found')), false)
+    assert.equal(looksLikeTransportMismatch(new Error('boom')), false)
+  })
+})
+
+describe('missing credentials', () => {
+  test('no key produces a configured:false adapter, not a crash', () => {
+    const provider = createDefaultProvider({ apiKey: '' })
+    assert.equal(provider.configured, false)
+    assert.equal(provider.status().detail, 'No OpenAI API key')
+  })
+
+  test('the first call raises openai_missing with a concrete fix', async () => {
+    const provider = createDefaultProvider({ apiKey: '' })
+    await assert.rejects(
+      () =>
+        provider.complete({
+          model: 'gpt-5.6-luna',
+          instructions: 'x',
+          input: [{ kind: 'text', role: 'user', content: 'hi' }],
+          tools: [],
+          maxOutputTokens: 16
+        }),
+      (error: unknown) => {
+        assert.ok(error instanceof HuddleError)
+        assert.equal(error.code, 'openai_missing')
+        assert.match(error.message, /OpenAI is not configured/)
+        assert.match(error.fix ?? '', /OPENAI_API_KEY in Settings/)
+        return true
+      }
+    )
+  })
+
+  test('listModels also refuses cleanly', async () => {
+    const provider = createDefaultProvider({ apiKey: '' })
+    await assert.rejects(() => provider.listModels(), /OpenAI is not configured/)
+  })
+})
+
+describe('deadlines', () => {
+  test('an expired deadline aborts the call signal', () => {
+    const deadline = createDeadline(1)
+    return new Promise<void>((resolve) => {
+      setTimeout(() => {
+        assert.equal(deadline.signal.aborted, true)
+        assert.equal(deadline.timedOut(), true)
+        deadline.dispose()
+        resolve()
+      }, 20)
+    })
+  })
+
+  test('an already-aborted caller signal aborts immediately', () => {
+    const controller = new AbortController()
+    controller.abort()
+    const deadline = createDeadline(5000, controller.signal)
+    assert.equal(deadline.signal.aborted, true)
+    assert.equal(deadline.timedOut(), false)
+    deadline.dispose()
+  })
+})
+
+describe('transport selection', () => {
+  test('the Responses API is preferred and can be switched explicitly', () => {
+    const adapter = new OpenAiProviderAdapter('sk-test')
+    assert.equal(adapter.transport(), 'responses')
+    adapter.setTransport('chat')
+    assert.equal(adapter.transport(), 'chat')
+    assert.match(adapter.status().detail, /Chat completions/)
+  })
+})

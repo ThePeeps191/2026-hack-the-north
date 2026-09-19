@@ -18,18 +18,21 @@ export class HuddleError extends Error {
   }
 }
 
+/** The shape that crosses IPC. `fix` is omitted when we have no real next step. */
 export interface ErrorShape {
   code: string
   message: string
-  fix: string | null
+  fix?: string
 }
 
 export function toErrorShape(error: unknown): ErrorShape {
   if (error instanceof HuddleError) {
-    return { code: error.code, message: error.message, fix: error.fix }
+    return error.fix
+      ? { code: error.code, message: error.message, fix: error.fix }
+      : { code: error.code, message: error.message }
   }
   if (error instanceof Error) {
-    return { code: 'internal', message: error.message, fix: null }
+    return { code: 'internal', message: error.message }
   }
-  return { code: 'internal', message: 'Unexpected error', fix: null }
+  return { code: 'internal', message: 'Unexpected error' }
 }

@@ -45,9 +45,10 @@ import {
 } from '../shared/types.ts'
 import type { RecordDecisionInput } from '../shared/api.ts'
 import type { HuddleBus } from './contracts.ts'
-import type { EventLog } from './event-log.ts'
+import { EventLog } from './event-log.ts'
 import type { JsonSnapshotStore } from './json-store.ts'
 import { HuddleError } from './huddle-error.ts'
+import { eventLogPath } from './paths.ts'
 
 /**
  * Backend-owned room state and the `HuddleBus` every other module reports
@@ -70,6 +71,13 @@ export interface RoomServiceOptions {
   state: PersistedState
   recovery?: RecoveryInfo
   resumable?: ResumableItem[]
+}
+
+export interface OpenOptions {
+  /** Durable event log. Defaults to the standard Huddle data directory. */
+  log?: EventLog
+  /** Seed an empty store with the default room and roster. Defaults to true. */
+  seed?: boolean
 }
 
 type Listener = (event: RuntimeEvent) => void
@@ -109,6 +117,79 @@ export class RoomService implements HuddleBus {
         this.utteranceIndex.set(requestKey(message.roomId, message.utteranceId), message.id)
       }
     }
+  }
+
+  /**
+   * Read the store and bring up a coherent service.
+   *
+   * - A missing file is a first launch: the default room and roster are seeded
+   *   and written to disk before anything is announced.
+   * - A valid older schema is migrated, backed up by the store, and noted.
+   * - A corrupt file is preserved beside the original, reported through
+   *   `snapshot().recovery`, and the app still starts on a fresh room.
+   * - Operations a restart interrupted become resumable items. We never claim
+   *   a job, task or session survived, and we never silently re-run it.
+   */
+  static async open(store: JsonSnapshotStore, options: OpenOptions = {}): Promise<RoomService> {
+    const log = options.log ?? new EventLog(eventLogPath())
+    const seed = options.seed ?? true
+    const read = await store.read()
+
+    let state: PersistedState
+    let recovery: RecoveryInfo | undefined
+    const startup: Array<{ level: 'info' | 'warn' | 'error'; text: string; fix?: string }> = []
+
+    if (read.kind === 'ok') {
+      state = read.data
+      if (read.migratedFrom !== null) {
+        startup.push({
+          level: 'info',
+          text: `Room state was upgraded from schema v${read.migratedFrom}. The previous file was kept as a backup.`
+        })
+      }
+    } else if (read.kind === 'corrupt') {
+      state = seedState()
+      recovery = {
+        message: `Huddle could not read the saved room state (${read.reason}). A fresh room was created and the previous file was preserved.`,
+        backupPath: read.backupPath ?? store.path()
+      }
+      startup.push({
+        level: 'warn',
+        text: 'Saved room state was unreadable, so Huddle started from a fresh room.',
+        fix: `The previous file is kept at ${recovery.backupPath}.`
+      })
+    } else {
+      // A missing file is a first launch: seed the default room and roster.
+      state = seed ? seedState() : emptyState()
+    }
+
+    const service = new RoomService({
+      store,
+      log,
+      state,
+      ...(recovery ? { recovery } : {}),
+      resumable: buildResumable(state)
+    })
+
+    // Anything the UI is about to show must be on disk first.
+    if (read.kind !== 'ok') {
+      try {
+        await service.flush()
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error)
+        startup.push({
+          level: 'error',
+          text: 'Huddle could not write its state file.',
+          fix: `Check that the data folder is writable. ${detail}`
+        })
+      }
+    }
+
+    const roomId = state.selectedRoomId ?? ''
+    for (const entry of startup) {
+      service.notice(roomId, entry.level, entry.text, entry.fix)
+    }
+    return service
   }
 
   /* ---------------------------------------------------------------- *
@@ -365,6 +446,14 @@ export class RoomService implements HuddleBus {
     return structuredClone(this.state.artifacts.filter((item) => item.roomId === roomId))
   }
 
+  getToolRuns(roomId: string): ToolRun[] {
+    return structuredClone(this.state.toolRuns.filter((item) => item.roomId === roomId))
+  }
+
+  getIntegrations(roomId: string): IntegrationAttempt[] {
+    return structuredClone(this.state.integrations.filter((item) => item.roomId === roomId))
+  }
+
   getSettings(): AppSettings {
     return structuredClone(this.state.settings)
   }
@@ -483,12 +572,16 @@ export class RoomService implements HuddleBus {
   }
 
   patchCall(patch: Partial<CallState>): CallState {
+    const previousRoomId = this.call.roomId
     const next = { ...this.call, ...patch }
     const changed = (Object.keys(patch) as Array<keyof CallState>).some(
       (key) => this.call[key] !== next[key]
     )
     this.call = next
-    if (changed && next.roomId) this.emit(next.roomId, { type: 'call.updated', call: { ...next } })
+    // Leaving a call clears the room id, so the event must be sent to the room
+    // we were in: otherwise the renderer keeps showing a call that has ended.
+    const target = next.roomId ?? previousRoomId
+    if (changed && target) this.emit(target, { type: 'call.updated', call: { ...next } })
     return { ...this.call }
   }
 
@@ -1011,4 +1104,87 @@ function isTerminal(status: Task['status']): boolean {
 
 function sameMode(a: StageState['mode'], b: StageState['mode']): boolean {
   return JSON.stringify(a) === JSON.stringify(b)
+}
+
+/* ------------------------------------------------------------------ *
+ * First launch and restart reconciliation
+ * ------------------------------------------------------------------ */
+
+/**
+ * A fresh install: one room, the default roster, nothing else invented. The
+ * room has no project bound until the human picks a real folder or asks for
+ * the demo project, so the team can never silently work on Huddle itself.
+ */
+export function seedState(): PersistedState {
+  const now = new Date().toISOString()
+  const roomId = randomUUID()
+  const room: Room = {
+    id: roomId,
+    name: defaultRoomName(0),
+    goal: '',
+    createdAt: now,
+    updatedAt: now,
+    stage: { mode: { kind: 'gallery' }, follow: true, pendingHint: null },
+    project: null,
+    joined: false,
+    decisionRevision: 0
+  }
+
+  return {
+    ...emptyState(),
+    rooms: [room],
+    agents: DEFAULT_ROSTER.map((presetId) => buildAgent(roomId, presetId, randomUUID(), now)),
+    selectedRoomId: roomId
+  }
+}
+
+const MAX_RESUMABLE = 12
+
+/**
+ * What a restart interrupted, told honestly. A persisted `running` job is not
+ * evidence the process survived, and we never re-run it on the user's behalf.
+ */
+function buildResumable(state: PersistedState): ResumableItem[] {
+  const items: ResumableItem[] = []
+
+  for (const job of state.jobs) {
+    if (job.status === 'running' || job.status === 'starting' || job.status === 'unknown') {
+      items.push({
+        id: job.id,
+        roomId: job.roomId,
+        kind: 'job',
+        title: job.label,
+        detail: `\`${job.command}\` was still running when Huddle last exited. Its process state is unverified, so it was not restarted automatically.`,
+        state: 'unknown'
+      })
+    }
+  }
+
+  for (const task of state.tasks) {
+    if (task.status === 'in_progress' || task.status === 'awaiting_review') {
+      items.push({
+        id: task.id,
+        roomId: task.roomId,
+        kind: 'task',
+        title: task.title,
+        detail: 'This task was mid-flight at shutdown. Its owner can pick it up again, but any partial result should be re-checked.',
+        state: 'interrupted'
+      })
+    }
+  }
+
+  for (const attempt of state.integrations) {
+    if (attempt.status === 'running') {
+      items.push({
+        id: attempt.id,
+        roomId: attempt.roomId,
+        kind: 'integration',
+        title: `Integration into ${attempt.targetBranch}`,
+        detail: 'The integration was interrupted. The previously verified revision is unchanged.',
+        state: 'interrupted'
+      })
+    }
+  }
+
+  return items.slice(0, MAX_RESUMABLE)
 }

@@ -104,6 +104,17 @@ export interface CallActions {
   revealPath: (path: string) => Promise<void>
 }
 
+/** A real backend notice: something happened that the person should see. */
+export interface NoticeItem {
+  id: string
+  level: 'info' | 'warn' | 'error'
+  text: string
+  /** Concrete next step, when we actually have one. */
+  fix?: string
+  at: string
+  roomId: string
+}
+
 export interface CallScreenProps {
   snapshot: AppSnapshot
   room: Room
@@ -126,6 +137,8 @@ export interface CallScreenProps {
   liveTranscript: LiveTranscript | null
   /** agentId -> live playback state. Absent means that agent is silent. */
   speaking: Record<string, SpeakingState>
+  /** Real notices from the backend, newest last. */
+  notices: NoticeItem[]
   /** Non-fatal action error to surface inline. */
   error: string | null
   actions: CallActions

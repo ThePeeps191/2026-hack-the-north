@@ -27,11 +27,15 @@ export class VoiceSession {
   private lastLevelSent = 0;
   private utteranceSeq = 0;
   private currentUtteranceId: string | null = null;
+  private baseUtteranceId = "";
+  private continuation = 0;
   private utteranceChunks: Float32Array[] = [];
   private utteranceSamples = 0;
   private preroll: Float32Array[] = [];
   private lastPartialAt = 0;
   private speakAbort: AbortController | null = null;
+  /** Audio frames run one at a time, but never behind control or synthesis. */
+  private audioChain: Promise<void> = Promise.resolve();
   private readonly guard = new GenerationGuard();
   private readonly timing = new TimingTracker();
   private readonly interrupt = new InterruptPolicy({
@@ -79,7 +83,17 @@ export class VoiceSession {
   async handleMessage(raw: Buffer | string, isBinary: boolean): Promise<void> {
     if (this.closed) return;
     if (isBinary) {
-      await this.handleAudio(raw instanceof Buffer ? raw : Buffer.from(raw));
+      // Microphone frames keep their own order and are never awaited by the
+      // caller: a synthesis request in flight must not block the mic path.
+      const buffer = raw instanceof Buffer ? raw : Buffer.from(raw);
+      this.audioChain = this.audioChain
+        .then(() => this.handleAudio(buffer))
+        .catch((error: unknown) => {
+          this.send({
+            type: "error",
+            message: `Audio frame failed: ${error instanceof Error ? error.message : String(error)}`
+          });
+        });
       return;
     }
     const text = typeof raw === "string" ? raw : raw.toString("utf8");
@@ -90,7 +104,7 @@ export class VoiceSession {
       this.send({ type: "error", message: "Malformed control message" });
       return;
     }
-    await this.handleControl(message);
+    this.handleControl(message);
   }
 
   async dispose(): Promise<void> {
@@ -102,7 +116,12 @@ export class VoiceSession {
     this.deps.vad.reset();
   }
 
-  private async handleControl(message: ClientMessage): Promise<void> {
+  /**
+   * Control messages are handled synchronously and never queued behind
+   * synthesis: stop-speaking and barge-in must work while a TTS request is still
+   * streaming.
+   */
+  private handleControl(message: ClientMessage): void {
     if (message.type === "mic.start") {
       this.micOn = true;
       this.deps.vad.reset();
@@ -111,7 +130,7 @@ export class VoiceSession {
     }
     if (message.type === "mic.stop") {
       this.micOn = false;
-      if (this.currentUtteranceId) await this.onSpeechEnd();
+      if (this.currentUtteranceId) this.onSpeechEnd();
       this.deps.vad.reset();
       return;
     }
@@ -127,7 +146,9 @@ export class VoiceSession {
       return;
     }
     if (message.type === "speak") {
-      await this.speak(message.text, message.voiceId);
+      // Detached on purpose (defects 1 and 2): speech streams for as long as the
+      // synthesis takes, and no other message may wait behind it.
+      void this.speak(message.text, message.voiceId);
     }
   }
 
@@ -158,8 +179,11 @@ export class VoiceSession {
     if (this.currentUtteranceId) {
       this.utteranceChunks.push(frame);
       this.utteranceSamples += frame.length;
-      if (this.utteranceSamples > MAX_UTTERANCE_SAMPLES) {
-        await this.onSpeechEnd();
+      if (this.utteranceSamples >= MAX_UTTERANCE_SAMPLES) {
+        // Defect 6: cut the segment, keep capturing, keep transcribing. The old
+        // code called onSpeechEnd() here and silently dropped everything the
+        // human said next, because VAD does not fire again while they talk.
+        this.cutSegment();
         return;
       }
       if (
@@ -178,7 +202,10 @@ export class VoiceSession {
   private async onSpeechStart(): Promise<void> {
     if (!this.micOn) return;
     this.timing.markVadSpeechStart();
-    this.currentUtteranceId = `utt-${++this.utteranceSeq}`;
+    this.utteranceSeq += 1;
+    this.continuation = 0;
+    this.baseUtteranceId = `utt-${this.utteranceSeq}`;
+    this.currentUtteranceId = this.baseUtteranceId;
     this.utteranceChunks = [...this.preroll];
     this.utteranceSamples = this.utteranceChunks.reduce((sum, chunk) => sum + chunk.length, 0);
     this.preroll = [];
@@ -189,6 +216,26 @@ export class VoiceSession {
     }
   }
 
+  /**
+   * Finalizes the open segment and immediately continues the same utterance under
+   * a new id, so one long breath becomes several finalized transcripts instead of
+   * being truncated. Capture is never stopped.
+   */
+  private cutSegment(): void {
+    const utteranceId = this.currentUtteranceId;
+    if (!utteranceId) return;
+    const pcm = concatFloat32(this.utteranceChunks);
+    this.continuation += 1;
+    this.currentUtteranceId = `${this.baseUtteranceId}-c${this.continuation}`;
+    this.utteranceChunks = [];
+    this.utteranceSamples = 0;
+    this.lastPartialAt = Date.now();
+    this.timing.markSpeechEnd();
+    if (pcm.length >= MIN_FINAL_SAMPLES) {
+      this.enqueueTranscript(utteranceId, pcm, true);
+    }
+  }
+
   private async onSpeechEnd(): Promise<void> {
     const utteranceId = this.currentUtteranceId;
     const chunks = this.utteranceChunks;
@@ -196,6 +243,7 @@ export class VoiceSession {
     this.utteranceChunks = [];
     this.utteranceSamples = 0;
     this.preroll = [];
+    this.continuation = 0;
     if (!utteranceId) return;
     this.timing.markSpeechEnd();
     const pcm = concatFloat32(chunks);

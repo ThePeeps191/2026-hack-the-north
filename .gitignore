@@ -232,3 +232,9 @@ pnpm-debug.log*
 Thumbs.db
 *.local
 .data/
+
+# Agent harness state written while building this repository.
+.reasonix/
+
+# Scratch space used by local scripts and tests.
+_scratch*

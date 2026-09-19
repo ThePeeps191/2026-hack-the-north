@@ -30,9 +30,11 @@ export function VoteGallery({
     <section className="panel">
       <h2>{voting ? 'Vote' : 'Sketches'}</h2>
       <p className="lede">
-        {voting
-          ? 'Pick one sketch that is not your own. Votes are public.'
-          : 'Public votes for this round.'}
+        {!youId
+          ? 'Join the room to vote for a sketch.'
+          : voting
+            ? 'Pick one sketch that is not your own. Votes are public.'
+            : 'Public votes for this round.'}
       </p>
       <div data-testid="sketch-gallery" className="gallery">
         {sketches.map((sketch) => {

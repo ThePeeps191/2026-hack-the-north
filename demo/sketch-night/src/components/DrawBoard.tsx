@@ -8,6 +8,8 @@ const INK = ['#1c1e22', '#c45c4a', '#3d7ea6', '#5c8a5a', '#f0a868', '#6b4ea2'];
 type DrawBoardProps = {
   prompt: string | null;
   submitted: boolean;
+  submittedCount: number;
+  playerCount: number;
   onSubmit: (imageDataUrl: string) => void;
 };
 
@@ -19,7 +21,13 @@ function pointFromEvent(event: PointerEvent, canvas: HTMLCanvasElement) {
   };
 }
 
-export function DrawBoard({ prompt, submitted, onSubmit }: DrawBoardProps) {
+export function DrawBoard({
+  prompt,
+  submitted,
+  submittedCount,
+  playerCount,
+  onSubmit,
+}: DrawBoardProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const drawing = useRef(false);
   const last = useRef<{ x: number; y: number } | null>(null);
@@ -117,6 +125,9 @@ export function DrawBoard({ prompt, submitted, onSubmit }: DrawBoardProps) {
       <div className="draw-head">
         <h2>Draw</h2>
         {prompt ? <p className="prompt-line">{prompt}</p> : null}
+        <p className="hint" data-testid="submit-progress">
+          {submittedCount} of {playerCount} sketches in
+        </p>
       </div>
       <canvas
         ref={canvasRef}
@@ -164,7 +175,11 @@ export function DrawBoard({ prompt, submitted, onSubmit }: DrawBoardProps) {
           {submitted ? 'Submitted' : 'Submit sketch'}
         </button>
       </div>
-      {submitted ? <p className="hint">Sketch in. Waiting on the rest of the table.</p> : null}
+      {submitted ? (
+        <p className="hint">Sketch in. Waiting on the rest of the table.</p>
+      ) : (
+        <p className="hint">Pick a pen, sketch, then submit before the timer runs out.</p>
+      )}
     </section>
   );
 }

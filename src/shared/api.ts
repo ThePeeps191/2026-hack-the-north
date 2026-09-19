@@ -84,6 +84,7 @@ export const IPC_CHANNELS = {
   // execution surfaces
   readWorkspaceFile: 'huddle:exec:readFile',
   listWorkspaceDir: 'huddle:exec:listDir',
+  searchWorkspace: 'huddle:exec:search',
   getWorkspaceDiff: 'huddle:exec:diff',
   cancelJob: 'huddle:exec:cancelJob',
   getJobOutput: 'huddle:exec:jobOutput',
@@ -95,6 +96,7 @@ export const IPC_CHANNELS = {
   closeBrowserSession: 'huddle:browser:close',
   browserNavigate: 'huddle:browser:navigate',
   browserScreenshot: 'huddle:browser:screenshot',
+  browserNetwork: 'huddle:browser:network',
 
   // settings + capabilities
   updateSettings: 'huddle:updateSettings',
@@ -127,6 +129,22 @@ export interface FileContents {
   bytes: number
   truncated: boolean
   modifiedAt: string
+}
+
+/** One real text match from a workspace search. */
+export interface SearchHit {
+  path: string
+  line: number
+  text: string
+}
+
+/** A real response captured from a remote browser session. */
+export interface NetworkEntry {
+  url: string
+  method: string
+  status: number
+  /** Size-bounded response body, so an agent can check the real payload. */
+  body: string
 }
 
 export interface DiffHunk {
@@ -224,6 +242,13 @@ export interface ListDirInput {
   path?: string
 }
 
+export interface SearchInput {
+  workspaceId: string
+  query: string
+  glob?: string
+  max?: number
+}
+
 export interface SetSecretInput {
   key: 'OPENAI_API_KEY' | 'ELEVENLABS_API_KEY' | 'BROWSERBASE_API_KEY' | 'BROWSERBASE_PROJECT_ID'
   value: string
@@ -289,6 +314,7 @@ export interface HuddleApi {
   exec: {
     readFile: (input: ReadFileInput) => Promise<FileContents>
     listDir: (input: ListDirInput) => Promise<DirEntry[]>
+    search: (input: SearchInput) => Promise<SearchHit[]>
     diff: (workspaceId: string) => Promise<WorkspaceDiff>
     cancelJob: (jobId: string) => Promise<void>
     jobOutput: (jobId: string) => Promise<JobOutput>
@@ -301,6 +327,7 @@ export interface HuddleApi {
     close: (sessionId: string) => Promise<void>
     navigate: (input: NavigateInput) => Promise<BrowserSessionRecord>
     screenshot: (sessionId: string) => Promise<ScreenshotResult>
+    network: (sessionId: string, filter?: string) => Promise<NetworkEntry[]>
   }
 
   settings: {
@@ -348,6 +375,7 @@ export type InvokeMap = {
   [IPC_CHANNELS.voiceTimings]: { args: []; result: IpcResult<TimingSample[]> }
   [IPC_CHANNELS.readWorkspaceFile]: { args: [ReadFileInput]; result: IpcResult<FileContents> }
   [IPC_CHANNELS.listWorkspaceDir]: { args: [ListDirInput]; result: IpcResult<DirEntry[]> }
+  [IPC_CHANNELS.searchWorkspace]: { args: [SearchInput]; result: IpcResult<SearchHit[]> }
   [IPC_CHANNELS.getWorkspaceDiff]: { args: [string]; result: IpcResult<WorkspaceDiff> }
   [IPC_CHANNELS.cancelJob]: { args: [string]; result: IpcResult<void> }
   [IPC_CHANNELS.getJobOutput]: { args: [string]; result: IpcResult<JobOutput> }
@@ -363,6 +391,7 @@ export type InvokeMap = {
     result: IpcResult<BrowserSessionRecord>
   }
   [IPC_CHANNELS.browserScreenshot]: { args: [string]; result: IpcResult<ScreenshotResult> }
+  [IPC_CHANNELS.browserNetwork]: { args: [string, string | undefined]; result: IpcResult<NetworkEntry[]> }
   [IPC_CHANNELS.updateSettings]: { args: [Partial<AppSettings>]; result: IpcResult<AppSettings> }
   [IPC_CHANNELS.setSecret]: { args: [SetSecretInput]; result: IpcResult<Capability> }
   [IPC_CHANNELS.refreshCapabilities]: { args: []; result: IpcResult<Capability[]> }

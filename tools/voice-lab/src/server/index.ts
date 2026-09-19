@@ -108,14 +108,14 @@ async function main(): Promise<void> {
     });
     const session = new VoiceSession(socket, { vad, transcriber, synthesizer, voices, stt });
     session.start();
-    let queue = Promise.resolve();
+    // No global serialising queue (defect 1): the session keeps microphone frames
+    // in order on their own chain and handles control synchronously, so an
+    // in-flight synthesis can never delay a mic frame or a stop command.
     socket.on("message", (data, isBinary) => {
       const raw = Array.isArray(data) ? Buffer.concat(data) : data;
-      queue = queue
-        .then(() => session.handleMessage(raw as Buffer, isBinary))
-        .catch((error: unknown) => {
-          console.error(error);
-        });
+      void session.handleMessage(raw as Buffer, isBinary).catch((error: unknown) => {
+        console.error(error);
+      });
     });
     socket.on("close", () => {
       void session.dispose();

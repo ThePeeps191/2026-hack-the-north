@@ -1,4 +1,5 @@
 import { PlaybackSession, shouldHaltPlaybackSink } from "../modules/playback-session.ts";
+import { SpeechCompletion } from "../modules/speech-completion.ts";
 import { TimingTracker } from "../modules/timing.ts";
 import { TranscriptLog } from "../modules/transcript-log.ts";
 import {
@@ -28,6 +29,7 @@ const tAudible = document.querySelector("#t-audible") as HTMLElement;
 
 const log = new TranscriptLog();
 const timing = new TimingTracker();
+const completion = new SpeechCompletion();
 let socket: WebSocket | null = null;
 let capture: { stream: MediaStream; node: AudioWorkletNode } | null = null;
 let voices: VoiceInfo[] = [];
@@ -56,7 +58,19 @@ function stopSink(): void {
 function noteSourceEnded(generationId: number): void {
   if (playGeneration !== generationId) return;
   activeSources = Math.max(0, activeSources - 1);
-  if (activeSources > 0 || !playback.isActive()) return;
+  completion.markDrained();
+  maybeReportComplete(generationId);
+}
+
+/**
+ * Defect 3: playback is complete only when synthesis reached EOF *and* the
+ * scheduled audio drained. Reporting earlier let an empty buffer end an
+ * utterance the agent was still speaking.
+ */
+function maybeReportComplete(generationId: number): void {
+  if (playGeneration !== generationId) return;
+  if (!completion.complete || !completion.canReportDrained) return;
+  if (!playback.isActive()) return;
   stopBtn.disabled = true;
   socket?.send(JSON.stringify({ type: "playback.complete", generationId }));
 }
@@ -207,11 +221,18 @@ function handleMessage(message: ServerMessage): void {
       pcmAssembler.reset();
       playGeneration = message.generationId;
       activeSources = 0;
+      completion.reset();
       playback.attach(message.generationId);
       stopBtn.disabled = false;
     }
+    if (message.state === "ended") {
+      // Synthesis EOF. Playback still has to drain before anything is complete.
+      completion.markSynthesisEnded();
+      maybeReportComplete(message.generationId);
+    }
     if (shouldHaltPlaybackSink(message.state)) {
       playback.stop();
+      completion.reset();
       stopBtn.disabled = true;
     }
     return;

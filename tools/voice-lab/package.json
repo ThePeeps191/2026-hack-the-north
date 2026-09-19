@@ -12,6 +12,8 @@
     "build": "tsc --noEmit -p tsconfig.json && vite build",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
+    "verify:local": "node scripts/verify-local.mjs",
+    "verify:live": "node scripts/verify-live.ts",
     "start": "tsx src/server/index.ts"
   },
   "engines": {

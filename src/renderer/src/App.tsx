@@ -1,196 +1,182 @@
-import { useMemo, useState, type JSX } from 'react'
+import { useMemo, useRef, type JSX } from 'react'
 import type {
-  AgentPresetId,
-  UpdateRoomInput,
-  WorkspaceFocus,
-  WorkspaceSelection
+  Agent,
+  CallState,
+  ContextRef,
+  Room,
+  ShareSurface,
+  WorkspaceRecord
 } from '../../shared/types'
-import { ActivityPanel } from './components/ActivityPanel'
-import { BottomBar } from './components/BottomBar'
-import { ConversationPanel } from './components/ConversationPanel'
-import { ParticipantStrip } from './components/ParticipantStrip'
-import { RoomHeader } from './components/RoomHeader'
-import { Sidebar } from './components/Sidebar'
-import { WorkspaceStage } from './components/WorkspaceStage'
+import { CallScreen } from './call/index'
+import { BrowserSurface } from './share/browser/index'
+import { CodeSurface } from './share/code/index'
+import type { SurfaceOwner, SurfaceProps } from './share/contract'
+import { FilesSurface } from './share/files/index'
+import { TerminalSurface } from './share/terminal/index'
+import { createActions } from './state/actions'
 import { useHuddle } from './useHuddle'
 
-export default function App(): JSX.Element {
-  const { snapshot, loading, loadError } = useHuddle()
-  const [drafts, setDrafts] = useState<Record<string, string>>({})
-  const [actionError, setActionError] = useState<string | null>(null)
-  const [sending, setSending] = useState(false)
-  const [creating, setCreating] = useState(false)
-  const [activityOpen, setActivityOpen] = useState(false)
+/**
+ * The integration lead's shell.
+ *
+ * It owns everything the call UI is not allowed to own: reading the backend
+ * snapshot, building the actions, and deciding which real workspace surface a
+ * stage shows. The CallScreen renders what it is given.
+ */
+const DISCONNECTED: CallState = {
+  roomId: null,
+  connection: 'disconnected',
+  micMuted: false,
+  deafened: false,
+  micLevel: 0,
+  listening: false,
+  speakingAgentId: null,
+  queuedAgentIds: [],
+  error: null
+}
 
-  const selectedRoom = useMemo(() => {
-    if (!snapshot) {
-      return null
-    }
-    return snapshot.rooms.find((room) => room.id === snapshot.selectedRoomId) ?? snapshot.rooms[0] ?? null
+export default function App(): JSX.Element {
+  const hub = useHuddle()
+  const { snapshot, loading, loadError } = hub
+
+  const room: Room | null = useMemo(() => {
+    if (!snapshot) return null
+    return (
+      snapshot.rooms.find((item) => item.id === snapshot.selectedRoomId) ??
+      snapshot.rooms[0] ??
+      null
+    )
   }, [snapshot])
 
-  const roomAgents = useMemo(() => {
-    if (!snapshot || !selectedRoom) {
-      return []
-    }
-    return snapshot.agents.filter((agent) => agent.roomId === selectedRoom.id)
-  }, [snapshot, selectedRoom])
+  const roomId = room?.id ?? ''
 
-  const roomMessages = useMemo(() => {
-    if (!snapshot || !selectedRoom) {
-      return []
-    }
-    return snapshot.messages.filter((message) => message.roomId === selectedRoom.id)
-  }, [snapshot, selectedRoom])
+  // Mic and deafen toggles must read the current call state, not a stale
+  // closure, so the actions read it through a ref.
+  const callRef = useRef<CallState | null>(snapshot?.call ?? null)
+  callRef.current = snapshot?.call ?? null
+
+  const actions = useMemo(
+    () => createActions({ roomId, getCall: () => callRef.current ?? DISCONNECTED, setError: hub.setError }),
+    [roomId, hub.setError]
+  )
 
   if (loading) {
     return (
       <div className="boot">
-        <p>Loading Huddle</p>
+        <p>Waking up Huddle…</p>
       </div>
     )
   }
 
-  if (loadError || !snapshot || !selectedRoom) {
+  if (loadError) {
     return (
       <div className="boot">
-        <p>{loadError ?? 'Huddle could not load a room.'}</p>
+        <h1>Huddle could not start</h1>
+        <p>{loadError}</p>
+        <p className="boot-hint">
+          The room state file lives in the Huddle data folder. Restart Huddle after fixing the
+          problem; your previous file is never deleted.
+        </p>
       </div>
     )
   }
 
-  const room = selectedRoom
-  const draft = drafts[room.id] ?? ''
-  const workspace = sanitizeWorkspace(room.workspace, roomAgents)
+  if (!snapshot || !room) {
+    return (
+      <div className="boot">
+        <h1>No room yet</h1>
+        <p>Huddle could not find a room to open.</p>
+      </div>
+    )
+  }
 
-  async function run(action: () => Promise<void>): Promise<void> {
-    try {
-      await action()
-      setActionError(null)
-    } catch (error) {
-      setActionError(error instanceof Error ? error.message : 'Something went wrong.')
+  const roomScoped = <T extends { roomId: string }>(items: T[]): T[] =>
+    items.filter((item) => item.roomId === room.id)
+
+  const agents = roomScoped(snapshot.agents)
+  const agentById = new Map(agents.map((agent) => [agent.id, agent]))
+  const workspaces = roomScoped(snapshot.workspaces)
+
+  /** Which real workspace a surface shows, and who owns it. */
+  const workspaceFor = (owner: SurfaceOwner): WorkspaceRecord | null => {
+    if (owner.kind === 'team') {
+      return workspaces.find((item) => item.kind === 'team') ?? null
     }
+    return workspaces.find((item) => item.agentId === owner.agentId) ?? null
   }
 
-  async function handleCreateRoom(): Promise<void> {
-    setCreating(true)
-    try {
-      await run(async () => {
-        await window.huddle.createRoom()
-      })
-    } finally {
-      setCreating(false)
+  const openRef = (ref: ContextRef): void => {
+    const surface: ShareSurface =
+      ref.kind === 'screenshot'
+        ? 'browser'
+        : ref.kind === 'job'
+          ? 'terminal'
+          : ref.kind === 'artifact'
+            ? 'files'
+            : 'code'
+    const agentId = ref.kind === 'file' ? ref.agentId : undefined
+    void actions.showShare(
+      agentId && agentById.has(agentId) ? { kind: 'agent', agentId } : { kind: 'team' },
+      surface
+    )
+  }
+
+  const renderSurface = (args: {
+    surface: ShareSurface
+    owner: SurfaceOwner
+    workspace: WorkspaceRecord | null
+    agent: Agent | null
+    onAttachRef: (ref: ContextRef) => void
+  }): JSX.Element => {
+    const props: SurfaceProps = {
+      room,
+      owner: args.owner,
+      workspace: args.workspace,
+      agent: args.agent,
+      editable: args.owner.kind === 'team',
+      onAttachRef: args.onAttachRef,
+      onOpenRef: openRef
     }
-  }
 
-  async function handleSelectRoom(roomId: string): Promise<void> {
-    if (roomId === room.id) {
-      return
-    }
-    await run(async () => {
-      await window.huddle.selectRoom(roomId)
-    })
-  }
-
-  async function handleSaveRoom(patch: { name?: string; description?: string }): Promise<void> {
-    await run(async () => {
-      await window.huddle.updateRoom({ id: room.id, ...patch })
-    })
-  }
-
-  async function handleWorkspace(next: WorkspaceSelection): Promise<void> {
-    const input: UpdateRoomInput = { id: room.id, workspace: next }
-    await run(async () => {
-      await window.huddle.updateRoom(input)
-    })
-  }
-
-  async function handleFocus(focus: WorkspaceFocus): Promise<void> {
-    await handleWorkspace({ ...workspace, focus })
-  }
-
-  async function handleAddAgent(presetId: AgentPresetId): Promise<void> {
-    await run(async () => {
-      await window.huddle.addAgent({ roomId: room.id, presetId })
-    })
-  }
-
-  async function handleSend(): Promise<void> {
-    const body = draft.trim()
-    if (!body || sending) {
-      return
-    }
-    setSending(true)
-    try {
-      await window.huddle.sendMessage({
-        roomId: room.id,
-        body,
-        clientRequestId: crypto.randomUUID()
-      })
-      setDrafts((current) => ({ ...current, [room.id]: '' }))
-      setActionError(null)
-    } catch (error) {
-      setActionError(error instanceof Error ? error.message : 'Could not send message.')
-    } finally {
-      setSending(false)
+    switch (args.surface) {
+      case 'code':
+        return <CodeSurface {...props} />
+      case 'terminal':
+        return <TerminalSurface {...props} />
+      case 'files':
+        return <FilesSurface {...props} />
+      case 'browser':
+        return <BrowserSurface {...props} />
+      default:
+        return <CodeSurface {...props} />
     }
   }
 
   return (
-    <div className="shell">
-      <Sidebar
-        rooms={snapshot.rooms}
-        selectedRoomId={room.id}
-        onSelect={(roomId) => void handleSelectRoom(roomId)}
-        onCreate={() => void handleCreateRoom()}
-        creating={creating}
-      />
-      <RoomHeader
-        room={room}
-        recovery={snapshot.recovery}
-        onSave={handleSaveRoom}
-      />
-      <ParticipantStrip
-        agents={roomAgents}
-        focus={workspace.focus}
-        onSelectFocus={(focus) => void handleFocus(focus)}
-        onAddAgent={handleAddAgent}
-      />
-      <WorkspaceStage
-        workspace={workspace}
-        agents={roomAgents}
-        onChange={(next) => void handleWorkspace(next)}
-      />
-      <ConversationPanel
-        messages={roomMessages}
-        draft={draft}
-        sending={sending}
-        error={actionError}
-        onDraftChange={(value) =>
-          setDrafts((current) => ({ ...current, [room.id]: value }))
-        }
-        onSend={() => void handleSend()}
-      />
-      <ActivityPanel open={activityOpen} events={snapshot.events} />
-      <BottomBar
-        room={room}
-        agentCount={roomAgents.length}
-        activityOpen={activityOpen}
-        onToggleActivity={() => setActivityOpen((value) => !value)}
-      />
-    </div>
+    <CallScreen
+      snapshot={snapshot}
+      room={room}
+      rooms={snapshot.rooms}
+      agents={agents}
+      messages={roomScoped(snapshot.messages)}
+      tasks={roomScoped(snapshot.tasks)}
+      decisions={roomScoped(snapshot.decisions)}
+      jobs={roomScoped(snapshot.jobs)}
+      workspaces={workspaces}
+      browserSessions={roomScoped(snapshot.browserSessions)}
+      artifacts={roomScoped(snapshot.artifacts)}
+      integrations={roomScoped(snapshot.integrations)}
+      capabilities={snapshot.capabilities}
+      resumable={snapshot.resumable}
+      settings={snapshot.settings}
+      call={snapshot.call}
+      human={hub.human}
+      liveTranscript={hub.liveTranscript}
+      speaking={hub.speaking}
+      notices={hub.notices}
+      error={hub.error ?? snapshot.call.error}
+      actions={actions}
+      renderSurface={renderSurface}
+    />
   )
-}
-
-function sanitizeWorkspace(
-  workspace: WorkspaceSelection,
-  agents: { id: string }[]
-): WorkspaceSelection {
-  if (workspace.focus.type === 'agent') {
-    const agentId = workspace.focus.agentId
-    if (!agents.some((agent) => agent.id === agentId)) {
-      return { ...workspace, focus: { type: 'team' } }
-    }
-  }
-  return workspace
 }

@@ -16,13 +16,17 @@ import type {
   DirEntry,
   FileContents,
   JobOutput,
+  NetworkEntry,
   PreviewInfo,
   ScreenshotResult,
+  SearchHit,
   VoiceOption,
   WorkspaceDiff
 } from '../shared/api.ts'
+import type { RecordDecisionInput } from '../shared/api.ts'
 import type {
   Agent,
+  AppSettings,
   Artifact,
   BrowserSessionRecord,
   Capability,
@@ -31,6 +35,7 @@ import type {
   JobRecord,
   MemoryEntry,
   Message,
+  MessageAuthor,
   ProjectBinding,
   Room,
   RuntimeEvent,
@@ -42,7 +47,13 @@ import type {
   ToolRun,
   WorkspaceRecord
 } from '../shared/types.ts'
-import type { HaltReason, SpeechReason } from '../shared/voice.ts'
+import type {
+  AudioChunkMessage,
+  HaltReason,
+  PlaybackClientEvent,
+  PlaybackServerEvent,
+  SpeechReason
+} from '../shared/voice.ts'
 
 /* ================================================================== *
  * Bus: how every module reports truth back to the room
@@ -68,8 +79,22 @@ export interface HuddleBus {
   /** Agent's current, observable activity. Work state and speech state are independent. */
   setAgentActivity(agentId: string, workState: Agent['workState'], label: string): void
 
+  /** Speech state follows client playback, never token arrival. */
+  setAgentSpeech(agentId: string, speechState: Agent['speechState']): void
+
   /** A meaningful phase change an agent wants the stage to follow. */
   proposeStage(roomId: string, agentId: string, surface: ShareSurface): void
+
+  /** The room's conversation of record. Agent and system messages land here. */
+  addMessage(message: Message): Message
+  updateMessage(messageId: string, patch: Partial<Message>): Message | null
+  addMemory(entry: MemoryEntry): void
+  recordDecision(input: RecordDecisionInput, source: MessageAuthor): Promise<Decision>
+  recordToolRun(run: ToolRun): void
+  getToolRuns(roomId: string): ToolRun[]
+  getDecisions(roomId: string): Decision[]
+  getIntegrations(roomId: string): IntegrationAttempt[]
+  getSettings(): AppSettings
 
   getRoom(roomId: string): Room | null
   getAgent(agentId: string): Agent | null
@@ -105,11 +130,8 @@ export interface StartJobInput {
   env?: Record<string, string>
 }
 
-export interface SearchHit {
-  path: string
-  line: number
-  text: string
-}
+/** Workspace text search hit. Defined in the shared API layer, re-exported here. */
+export type { SearchHit } from '../shared/api.ts'
 
 export interface WriteResult {
   path: string
@@ -240,13 +262,8 @@ export interface BrowserActionResult {
   observation: BrowserObservation | null
 }
 
-export interface NetworkCapture {
-  url: string
-  method: string
-  status: number
-  /** Size-bounded response body text, for checking what actually went over the wire. */
-  body: string
-}
+/** A real response captured from a remote browser session, for QA evidence. */
+export type NetworkCapture = NetworkEntry
 
 export interface BrowserHost {
   /** Open a real remote session. Fails loudly when credentials are missing. */
@@ -305,6 +322,11 @@ export interface VoiceHost {
   setMicMuted(muted: boolean): void
   setDeafened(deafened: boolean): void
 
+  /** Renderer microphone frames, Int16 little-endian PCM at CAPTURE_SAMPLE_RATE. */
+  pushMicFrame(pcm: ArrayBuffer, capturedAt: number): void
+  /** Renderer reports of what the audio hardware actually did. */
+  reportClientEvent(event: PlaybackClientEvent): void
+
   /** Queue speech through the floor manager. */
   speak(intent: SpeechIntent): SpeechHandle
   /** Cancel current audio and obsolete queued speech. Never cancels execution. */
@@ -318,6 +340,20 @@ export interface VoiceHost {
   timings(): TimingSample[]
   dispose(): Promise<void>
 }
+
+/** What the voice host needs from the composition root. */
+export interface VoiceHostDeps {
+  bus: HuddleBus
+  settings(): AppSettings
+  /** The room service's utterance sink. Resolved late: the runtime attaches after the voice host. */
+  sink(): VoiceSink | null
+  /** main -> renderer playback control. Never buffered, never persisted. */
+  sendServerEvent(event: PlaybackServerEvent): void
+  /** main -> renderer TTS PCM. Never buffered, never persisted. */
+  sendAudioChunk(chunk: AudioChunkMessage): void
+}
+
+export type CreateVoiceHost = (deps: VoiceHostDeps) => VoiceHost
 
 /** The voice host calls this when a complete human utterance is ready. */
 export interface VoiceSink {
@@ -345,6 +381,8 @@ export interface RuntimeDeps {
   voice: VoiceHost
   /** Provider capability lookup so tools degrade honestly. */
   capability(id: Capability['id']): Capability
+  /** Current settings: model ids, limits, preview mode. */
+  settings(): AppSettings
 }
 
 export interface InboundMessage {
@@ -375,8 +413,87 @@ export interface AgentRuntime {
   /** Record a tool run for the activity view. */
   listToolRuns(roomId: string): ToolRun[]
 
+  /**
+   * Optional: prove a model id actually answers a request. Used by the settings
+   * screen so a model can be shown as verified rather than merely configured.
+   */
+  probeModel?(model: string): Promise<{ ok: boolean; detail: string; fix?: string }>
+
   dispose(): Promise<void>
 }
+
+/* ================================================================== *
+ * Composition seams. The integration lead owns main/index.ts and wires
+ * these factories together; each specialist exports exactly one.
+ * ================================================================== */
+
+export interface ExecutionHostDeps {
+  bus: HuddleBus
+  capability(id: Capability['id']): Capability
+  settings(): AppSettings
+}
+
+export type CreateExecutionHost = (deps: ExecutionHostDeps) => ExecutionHost
+
+export interface BrowserHostDeps {
+  bus: HuddleBus
+  /** Artifacts, the artifact directory and the reachable preview come from exec. */
+  exec: Pick<ExecutionHost, 'writeArtifact' | 'artifactDir' | 'getPreview'>
+  settings(): AppSettings
+}
+
+export type CreateBrowserHost = (deps: BrowserHostDeps) => BrowserHost
+
+export type CreateAgentRuntime = (deps: RuntimeDeps) => AgentRuntime
+
+/* ================================================================== *
+ * Re-exports
+ *
+ * Specialists import the shared domain and API types from this file so that a
+ * single module describes the whole main-process seam. Nothing is redefined
+ * here: these are the same types the renderer uses.
+ * ================================================================== */
+
+export type {
+  Agent,
+  AppSettings,
+  Artifact,
+  BrowserSessionRecord,
+  Capability,
+  CapabilityId,
+  Decision,
+  IntegrationAttempt,
+  JobRecord,
+  MemoryEntry,
+  Message,
+  MessageAuthor,
+  ProjectBinding,
+  Room,
+  RuntimeEvent,
+  RuntimeEventBody,
+  ShareOwner,
+  ShareSurface,
+  StageState,
+  Task,
+  TaskStatus,
+  TimingSample,
+  ToolRun,
+  WorkspaceRecord
+} from '../shared/types.ts'
+
+export type {
+  DirEntry,
+  FileContents,
+  JobOutput,
+  ModelOption,
+  NetworkEntry,
+  PreviewInfo,
+  ScreenshotResult,
+  VoiceOption,
+  WorkspaceDiff
+} from '../shared/api.ts'
+
+export type { HaltReason, PlaybackClientEvent, SpeechReason } from '../shared/voice.ts'
 
 /* ================================================================== *
  * Shared small helpers

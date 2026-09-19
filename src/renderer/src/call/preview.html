@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Huddle — call UI dev preview</title>
+    <style>
+      html,
+      body,
+      #root {
+        height: 100%;
+      }
+    </style>
+  </head>
+  <body>
+    <!--
+      Dev preview entry point. Not part of the packaged app: the Electron
+      renderer entry is src/renderer/index.html.
+
+      From the repo root:
+        npx vite --root src/renderer/src/call
+      then open http://localhost:5173/preview.html
+    -->
+    <div id="root"></div>
+    <script type="module">
+      import { createRoot } from 'react-dom/client'
+      import { createElement } from 'react'
+      import { PreviewApp } from './preview.tsx'
+
+      createRoot(document.getElementById('root')).render(createElement(PreviewApp))
+    </script>
+  </body>
+</html>

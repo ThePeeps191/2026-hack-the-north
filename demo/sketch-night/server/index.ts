@@ -132,10 +132,15 @@ app.post('/api/dev/reset', (_req, res) => {
     res.status(403).json({ error: 'Dev routes are disabled' });
     return;
   }
-  room().reset();
-  broadcast();
+  const current = room();
+  current.reset();
+  // `broadcast()` skips clients that have no player id, so reset pushes the empty
+  // lobby out explicitly. The empty `you.id` is a sentinel: the client cannot find
+  // itself in the player list, drops its stored session and shows the join form
+  // instead of painting a round that no longer exists.
   for (const client of clients) {
     client.playerId = null;
+    send(client.ws, { type: 'state', state: current.snapshot(), you: { id: '' } });
   }
   res.json({ ok: true });
 });
