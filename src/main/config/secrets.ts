@@ -12,6 +12,7 @@ import { appRoot, dataRoot, secretsPath } from '../paths.ts'
 
 export type SecretKey =
   | 'OPENAI_API_KEY'
+  | 'DEEPSEEK_API_KEY'
   | 'ELEVENLABS_API_KEY'
   | 'BROWSERBASE_API_KEY'
   | 'BROWSERBASE_PROJECT_ID'
@@ -19,6 +20,7 @@ export type SecretKey =
 
 export const SECRET_KEYS: readonly SecretKey[] = [
   'OPENAI_API_KEY',
+  'DEEPSEEK_API_KEY',
   'ELEVENLABS_API_KEY',
   'BROWSERBASE_API_KEY',
   'BROWSERBASE_PROJECT_ID',

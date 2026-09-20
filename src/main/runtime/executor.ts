@@ -697,11 +697,33 @@ function safeParse(text: string): unknown {
 }
 
 /** Keeps the first item (the brief) plus the newest items. */
-function boundInput(input: ProviderInputItem[]): ProviderInputItem[] {
+/**
+ * Keeps the brief plus the newest items, without ever splitting a tool call
+ * from its result.
+ *
+ * A `result` item becomes a `tool` message, which is only valid immediately
+ * after the assistant message that requested it. Slicing blindly could make the
+ * window start on an orphaned result, and every provider rejects that with a
+ * 400 — which is what made long runs end with "stopped without a report"
+ * instead of a summary: the closing turn is the one with the longest context,
+ * so it failed the most reliably. A trailing call with no result yet is dropped
+ * for the same reason.
+ */
+export function boundInput(input: ProviderInputItem[]): ProviderInputItem[] {
   if (input.length <= MAX_CONTEXT_ITEMS) return input
   const first = input[0]
-  const recent = input.slice(input.length - (MAX_CONTEXT_ITEMS - 1))
+
+  let start = input.length - (MAX_CONTEXT_ITEMS - 1)
+  // Walk forward past any result whose call is on the other side of the cut.
+  while (start < input.length && input[start].kind === 'result') start += 1
+
+  let end = input.length
+  // A call whose result has not been pushed yet would be left unanswered.
+  while (end > start && input[end - 1].kind === 'call') end -= 1
+
+  const recent = input.slice(start, end)
   const dropped = input.length - recent.length - 1
+  if (dropped <= 0) return input
   const marker: ProviderInputItem = {
     kind: 'text',
     role: 'user',

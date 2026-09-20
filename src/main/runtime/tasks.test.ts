@@ -193,3 +193,42 @@ describe('task board summary', () => {
     assert.equal(summarizeTaskGraph({ tasks: [], agents: [] }), 'No tasks yet.')
   })
 })
+
+describe('re-planning a stale task', () => {
+  test('moving a task to a newer decision revision clears the stale flag', () => {
+    // The flag used to be permanent: a teammate could re-read the new decision,
+    // confirm its work still matched, and still never be allowed to submit —
+    // so its branch never reached integration and the team verified a revision
+    // with half the work missing.
+    const base = buildTask(clock(), {
+      roomId: 'r1',
+      title: 'Strip voter identity from the client',
+      detail: '',
+      ownerAgentId: 'maya',
+      createdBy: { type: 'human' },
+      decisionRevision: 0
+    })
+    const stale = staleTask(base, 1, 'Requirement change r1', '2026-01-01T00:01:00.000Z')
+    assert.notEqual(stale.staleSince, null)
+
+    const replanned = applyTaskPatch(stale, { decisionRevision: 1 }, '2026-01-01T00:02:00.000Z')
+    assert.equal(replanned.staleSince, null)
+    assert.equal(replanned.staleReason, null)
+    assert.equal(replanned.decisionRevision, 1)
+    assert.equal(plannedBefore(replanned, 1), false, 'the task may now be submitted')
+  })
+
+  test('a revision that does not move forward leaves the flag alone', () => {
+    const base = buildTask(clock(), {
+      roomId: 'r1',
+      title: 'Something',
+      detail: '',
+      ownerAgentId: 'maya',
+      createdBy: { type: 'human' },
+      decisionRevision: 2
+    })
+    const stale = staleTask(base, 3, 'Requirement change r3', '2026-01-01T00:01:00.000Z')
+    const unchanged = applyTaskPatch(stale, { decisionRevision: 2 }, '2026-01-01T00:02:00.000Z')
+    assert.notEqual(unchanged.staleSince, null, 'still stale against revision 3')
+  })
+})

@@ -3,6 +3,7 @@ import type { ModelOption, VoiceOption } from '../../shared/api.ts'
 import type { AppSettings, Capability, CapabilityId } from '../../shared/types.ts'
 import { speechAssets, voiceHelperPath } from '../paths.ts'
 import { secretOrigin, setSecret, getSecret, type SecretKey } from './secrets.ts'
+import { backendForModel, PROVIDER_BACKENDS } from '../runtime/provider.ts'
 
 /**
  * Truthful capability reporting.
@@ -45,7 +46,7 @@ export interface CapabilityService {
 }
 
 const LABELS: Record<CapabilityId, string> = {
-  openai: 'OpenAI',
+  openai: 'Models',
   elevenlabs: 'ElevenLabs speech',
   browserbase: 'Browserbase',
   localSpeech: 'Local speech (Whisper + VAD)',
@@ -56,6 +57,7 @@ const LABELS: Record<CapabilityId, string> = {
 /** Which capability a secret belongs to. */
 const SECRET_CAPABILITY: Record<SecretKey, CapabilityId> = {
   OPENAI_API_KEY: 'openai',
+  DEEPSEEK_API_KEY: 'openai',
   ELEVENLABS_API_KEY: 'elevenlabs',
   BROWSERBASE_API_KEY: 'browserbase',
   BROWSERBASE_PROJECT_ID: 'browserbase',
@@ -157,110 +159,135 @@ export function createCapabilityService(deps: CapabilityDeps): CapabilityService
  * Probes
  * ------------------------------------------------------------------ */
 
+/**
+ * One reachable-models probe across every configured model backend.
+ *
+ * Huddle can reason through OpenAI, DeepSeek, or both at once, so this reports
+ * a single "Models" capability describing what is actually reachable rather
+ * than one row per vendor. A backend with no key is not an error — it is simply
+ * not one of the places a model can come from — but a backend whose key is
+ * *rejected*, or whose configured model does not exist, is reported plainly.
+ */
 async function probeOpenAI(
   deps: CapabilityDeps,
   models: ModelOption[],
   verifiedModels: Set<string>
 ): Promise<Capability> {
   const checkedAt = new Date().toISOString()
-  const key = getSecret('OPENAI_API_KEY')
-  if (!key) {
+  const configured = PROVIDER_BACKENDS.filter((backend) => getSecret(backend.secret).length > 0)
+
+  if (configured.length === 0) {
     return {
       id: 'openai',
       label: LABELS.openai,
       state: 'unavailable',
-      detail: `No API key (checked ${secretOrigin('OPENAI_API_KEY')}).`,
-      fix: 'Add OPENAI_API_KEY in Settings, or put it in .env at the repo root.',
+      detail: `No model API key (checked ${PROVIDER_BACKENDS.map(
+        (backend) => `${backend.secret}: ${secretOrigin(backend.secret)}`
+      ).join(', ')}).`,
+      fix: 'Add OPENAI_API_KEY or DEEPSEEK_API_KEY in Settings, or put one in .env at the repo root.',
       checkedAt
     }
   }
 
-  try {
-    const response = await fetchWithTimeout('https://api.openai.com/v1/models', {
-      headers: { Authorization: `Bearer ${key}` }
-    })
-    if (response.status === 401 || response.status === 403) {
-      return {
-        id: 'openai',
-        label: LABELS.openai,
-        state: 'error',
-        detail: `The key was rejected (HTTP ${response.status}).`,
-        fix: 'Replace OPENAI_API_KEY with a valid key in Settings.',
-        checkedAt
-      }
-    }
-    if (!response.ok) {
-      return {
-        id: 'openai',
-        label: LABELS.openai,
-        state: 'error',
-        detail: `OpenAI answered HTTP ${response.status}.`,
-        fix: 'Check network access, then refresh capabilities.',
-        checkedAt
-      }
-    }
-    const payload = (await response.json()) as { data?: Array<{ id?: string }> }
-    const ids = (payload.data ?? [])
-      .map((entry) => entry.id)
-      .filter((id): id is string => typeof id === 'string')
-      .sort()
-    models.length = 0
-    for (const id of ids) models.push({ id, verified: false })
+  const reachable: string[] = []
+  const problems: string[] = []
+  const healthy: string[] = []
 
-    const settings = deps.settings()
-    const wanted = [settings.models.contributor, settings.models.conversation]
-    const missing = wanted.filter((id) => !ids.includes(id))
-    for (const id of wanted) {
-      if (!deps.probeModel || missing.includes(id) || verifiedModels.has(id)) continue
-      try {
-        const result = await deps.probeModel(id)
-        if (result.ok) verifiedModels.add(id)
-        else if (result.fix) {
-          return {
-            id: 'openai',
-            label: LABELS.openai,
-            state: 'error',
-            detail: `${ids.length} models reachable, but ${id} did not answer: ${result.detail}`,
-            fix: result.fix,
-            checkedAt
-          }
-        }
-      } catch {
-        // A probe failure is reported through the model list, not as a lie.
+  for (const backend of configured) {
+    const key = getSecret(backend.secret)
+    const url = `${backend.baseURL ?? 'https://api.openai.com/v1'}/models`
+    try {
+      const response = await fetchWithTimeout(url, { headers: { Authorization: `Bearer ${key}` } })
+      if (response.status === 401 || response.status === 403) {
+        problems.push(`${backend.label} rejected its key (HTTP ${response.status})`)
+        continue
       }
-    }
-
-    if (missing.length > 0) {
-      return {
-        id: 'openai',
-        label: LABELS.openai,
-        state: 'error',
-        detail: `${ids.length} models reachable, but the configured model ${missing.join(', ')} is not available on this key.`,
-        fix: 'Pick an available model in Settings (for example gpt-5.6-luna).',
-        checkedAt
+      if (!response.ok) {
+        problems.push(`${backend.label} answered HTTP ${response.status}`)
+        continue
       }
+      const payload = (await response.json()) as { data?: Array<{ id?: string }> }
+      const ids = (payload.data ?? [])
+        .map((entry) => entry.id)
+        .filter((id): id is string => typeof id === 'string')
+      reachable.push(...ids)
+      healthy.push(`${backend.label} ${ids.length} models`)
+    } catch (error) {
+      problems.push(`${backend.label} was unreachable (${describe(error)})`)
     }
+  }
 
-    const verifiedLabel = [...verifiedModels].join(', ')
-    return {
-      id: 'openai',
-      label: LABELS.openai,
-      state: 'ready',
-      detail: verifiedLabel
-        ? `Key accepted; ${verifiedLabel} answered a real request.`
-        : `Key accepted; ${ids.length} models listed.`,
-      fix: null,
-      checkedAt
-    }
-  } catch (error) {
+  const unique = [...new Set(reachable)].sort()
+  models.length = 0
+  for (const id of unique) models.push({ id, verified: false })
+
+  if (unique.length === 0) {
     return {
       id: 'openai',
       label: LABELS.openai,
       state: 'error',
-      detail: `Could not reach OpenAI: ${describe(error)}`,
-      fix: 'Check network access, then refresh capabilities. Typing and room state still work offline.',
+      detail: problems.join('; ') || 'No backend listed any model.',
+      fix: 'Check the keys and network access, then refresh capabilities.',
       checkedAt
     }
+  }
+
+  // The models the room is actually set to use have to exist and to answer.
+  const settings = deps.settings()
+  const wanted = [...new Set([settings.models.contributor, settings.models.conversation])]
+  const missing = wanted.filter((id) => !unique.includes(id))
+
+  for (const id of wanted) {
+    if (!deps.probeModel || missing.includes(id) || verifiedModels.has(id)) continue
+    try {
+      const result = await deps.probeModel(id)
+      if (result.ok) verifiedModels.add(id)
+      else if (result.fix) {
+        return {
+          id: 'openai',
+          label: LABELS.openai,
+          state: 'error',
+          detail: `${unique.length} models reachable, but ${id} did not answer: ${result.detail}`,
+          fix: result.fix,
+          checkedAt
+        }
+      }
+    } catch {
+      // A probe failure is reported through the model list, not as a lie.
+    }
+  }
+
+  if (missing.length > 0) {
+    const suggestion = unique.find((id) => id.startsWith('deepseek')) ?? unique[0]
+    return {
+      id: 'openai',
+      label: LABELS.openai,
+      state: 'error',
+      detail: `${unique.length} models reachable, but the configured model ${missing.join(
+        ', '
+      )} is not available on ${[...new Set(missing.map((id) => backendForModel(id).label))].join(', ')}.`,
+      fix: `Pick an available model in Settings${suggestion ? ` (for example ${suggestion})` : ''}.`,
+      checkedAt
+    }
+  }
+
+  const verifiedLabel = [...verifiedModels].join(', ')
+  const detail = [
+    healthy.join(', '),
+    verifiedLabel ? `${verifiedLabel} answered a real request` : `${unique.length} models listed`
+  ]
+    .filter((part) => part.length > 0)
+    .join(' · ')
+
+  return {
+    id: 'openai',
+    label: LABELS.openai,
+    // A backend that failed while another one worked is worth saying out loud,
+    // but it does not make the capability unusable.
+    state: 'ready',
+    detail: problems.length > 0 ? `${detail}. Also: ${problems.join('; ')}.` : detail,
+    fix: null,
+    checkedAt
   }
 }
 

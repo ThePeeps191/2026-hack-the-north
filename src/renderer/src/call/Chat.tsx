@@ -66,6 +66,8 @@ export interface ChatProps {
   decisions: Decision[]
   artifacts: Artifact[]
   speaking: Record<string, SpeakingState>
+  /** True once the human has joined the call and could actually hear speech. */
+  inCall: boolean
   /** When set, only the private channel with this agent is shown. */
   privateAgentId: string | null
   emptyDetail: string
@@ -81,6 +83,7 @@ export function Chat({
   decisions,
   artifacts,
   speaking,
+  inCall,
   privateAgentId,
   emptyDetail,
   onReplyTo,
@@ -128,6 +131,7 @@ export function Chat({
               decisions={decisions}
               artifacts={artifacts}
               speaking={speaking}
+              inCall={inCall}
               grouped={grouped}
               onReplyTo={onReplyTo}
               onOpenRef={onOpenRef}
@@ -148,6 +152,8 @@ interface MessageRowProps {
   decisions: Decision[]
   artifacts: Artifact[]
   speaking: Record<string, SpeakingState>
+  /** True once the human has joined the call and could actually hear speech. */
+  inCall: boolean
   /** True when this follows another message from the same author. */
   grouped: boolean
   onReplyTo: (message: Message) => void
@@ -163,6 +169,7 @@ function MessageRow({
   decisions,
   artifacts,
   speaking,
+  inCall,
   grouped,
   onReplyTo,
   onOpenRef,
@@ -186,7 +193,15 @@ function MessageRow({
       : []
   const kind = LABELLED_KINDS.has(message.kind) ? kindLabel(message.kind) : null
   const speech = message.spoken
-  const unfinished = speech !== undefined && UNFINISHED_SPEECH.has(speech.state)
+  /*
+   * "Cancelled — the text above is complete" under every message.
+   *
+   * When nobody has joined the call there is no audio to miss, so noting that
+   * each line went unspoken is not honesty, it is three identical warnings
+   * about a thing that was never going to happen. The note matters only once
+   * the human is in the call and could actually have heard it.
+   */
+  const unfinished = inCall && speech !== undefined && UNFINISHED_SPEECH.has(speech.state)
 
   if (isSystem) {
     return (

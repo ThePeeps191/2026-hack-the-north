@@ -70,10 +70,17 @@ starts and stays useful without them, and tells you what is missing:
 
 | Variable | Used for | Without it |
 | --- | --- | --- |
-| `OPENAI_API_KEY` | agent reasoning and tool selection | the room still works: you can type, the state is real, but nobody thinks or works |
+| `DEEPSEEK_API_KEY` | agent reasoning and tool selection — the default backend | the room still works: you can type, the state is real, but nobody thinks or works |
+| `OPENAI_API_KEY` | the same, for `gpt-*` models | only needed if you point a model slot at OpenAI |
 | `ELEVENLABS_API_KEY` | AI speech (voices for Maya, Alex, Sam, Rio, Nova) | replies are written only; captions still work |
 | `BROWSERBASE_API_KEY`, `BROWSERBASE_PROJECT_ID` | real remote browser sessions for QA | browser verification is reported as unavailable |
 | `NGROK_AUTHTOKEN` | reserved for a stable preview tunnel | the localtunnel path is used |
+
+**Two model backends, one adapter.** OpenAI and DeepSeek both speak the OpenAI wire format, so the
+backend is chosen from the model id: `deepseek-*` goes to DeepSeek, everything else to OpenAI. A
+model whose backend has no key is refused with a clear error rather than quietly answered by the
+other one — a model id is a claim about which model did the work, and swapping it silently would
+make every later report untrue.
 
 Local speech (one-time, plus a model download):
 
@@ -91,10 +98,21 @@ npm test           # root test suite (node --test)
 npm run typecheck  # tsc for main/preload/shared and for the renderer
 ```
 
-Agent models are configurable in Settings (or in the room state file). The defaults shipped here are
-`gpt-6-astra` for deep work and `gpt-5.6-luna` for fast conversation; switch both to a cheaper model
-if you are burning credits, and use **Settings → Refresh capabilities** to see which models your key
-can actually reach — a model is only shown as verified once it has answered a real request.
+Agent models are configurable in Settings (or in the room state file). Both slots default to
+`deepseek-flash`: it answers in about a second, holds up on tool selection, and a full demo run
+costs cents. Point either slot at a `gpt-*` model and the adapter routes that slot to OpenAI
+instead. Use **Settings → Refresh capabilities** to see which models your keys can actually reach —
+a model is only shown as verified once it has answered a real request.
+
+Before a demo, run the one command that checks the things that look like app bugs but are not —
+empty provider accounts, a full disk, a missing Whisper model:
+
+```bash
+npm run demo:check
+```
+
+`docs/TESTING.md` is a hand-testing checklist: what to do, what you should see, and what it means
+when you see something else.
 
 ### Verification commands
 

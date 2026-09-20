@@ -7,6 +7,8 @@
  * is unknown, the prompt says it is unknown.
  */
 
+import { existsSync } from 'node:fs'
+import { join } from 'node:path'
 import type { Agent, JobRecord, Message, ToolRun } from '../../shared/types.ts'
 import type { HuddleBus } from '../contracts.ts'
 
@@ -18,6 +20,8 @@ export interface RoomStateSnapshot {
     decisionRevision: number
     projectRoot: string | null
     projectKind: string | null
+    /** Null when the project has no manifest to install dependencies from. */
+    dependenciesInstalled: boolean | null
   }
   agent: {
     id: string
@@ -106,7 +110,8 @@ export function collectRoomState(
       goal: room.goal,
       decisionRevision: room.decisionRevision,
       projectRoot: room.project?.rootPath ?? null,
-      projectKind: room.project?.kind ?? null
+      projectKind: room.project?.kind ?? null,
+      dependenciesInstalled: dependencyState(room.project?.rootPath ?? null)
     },
     agent: agent
       ? { id: agent.id, name: agent.name, role: agent.role, summary: agent.summary }
@@ -186,6 +191,37 @@ export function collectRoomState(
   }
 }
 
+/**
+ * Whether a freshly bound project has had its dependencies installed.
+ *
+ * The demo project is copied without `node_modules`, so the first teammate to
+ * run anything hits `'concurrently' is not recognized` and spends a turn
+ * working out that it needs to install first — and so does the next one, and
+ * the one after that. Saying it once in the shared state costs nothing and
+ * stops three teammates rediscovering the same thing separately.
+ */
+function dependencyState(rootPath: string | null): boolean | null {
+  if (!rootPath) return null
+  if (!existsSync(join(rootPath, 'package.json'))) return null
+  return existsSync(join(rootPath, 'node_modules'))
+}
+
+/**
+ * The shell `run_command` runs a command line in, named plainly enough that a
+ * teammate stops reaching for the wrong one.
+ */
+function describeShell(): string {
+  if (process.platform === 'win32') {
+    return (
+      'commands run through cmd.exe on Windows. Use Windows syntax — `dir`, `type`, `findstr`, ' +
+      '`&&` to chain. POSIX-only forms (`2>&1 | tail`, `head`, `wc`, `ls`, single quotes for ' +
+      'strings) fail with exit 255. Prefer plain `npm test` and read the whole output with ' +
+      'get_job_output instead of piping it through anything.'
+    )
+  }
+  return `commands run through /bin/sh on ${process.platform}. POSIX syntax works.`
+}
+
 function clip(text: string, max: number): string {
   const trimmed = text.replace(/\s+/g, ' ').trim()
   return trimmed.length <= max ? trimmed : `${trimmed.slice(0, max)}…`
@@ -206,6 +242,19 @@ export function formatRoomState(snapshot: RoomStateSnapshot, style: 'conversatio
   parts.push(line('Room: ', `${room.name} — goal: ${room.goal || '(no goal recorded yet)'}`))
   parts.push(line('Project: ', room.projectRoot ? `${room.projectRoot} (${room.projectKind})` : 'no project folder bound to this room yet'))
   parts.push(line('Decision revision: ', String(room.decisionRevision)))
+
+  // Which shell `run_command` actually uses. Teammates were guessing, and the
+  // guess was wrong half the time: POSIX pipelines like `cmd 2>&1 | tail -20`
+  // exit 255 under cmd.exe, which reads as a broken project rather than a
+  // broken command line. Only shown where commands can be run.
+  if (style !== 'conversation') {
+    parts.push(line('Shell: ', describeShell()))
+    if (room.dependenciesInstalled === false) {
+      parts.push(
+        'Dependencies: node_modules is missing, so any script in package.json will fail until somebody runs `npm install` in the project root. Check the command log above before running it again — a teammate may already have.'
+      )
+    }
+  }
 
   if (snapshot.decisions.length > 0) {
     parts.push('Active decisions:')

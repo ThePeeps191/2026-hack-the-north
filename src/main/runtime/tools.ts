@@ -333,6 +333,60 @@ function requireProject(ctx: ToolContext): string | null {
  * Honest degradation: when a provider capability is not ready, the tool says so
  * with the concrete fix instead of failing somewhere deeper.
  */
+/**
+ * Turns a local URL into one the remote browser can actually open.
+ *
+ * The browser Huddle drives runs in Browserbase's cloud, so `localhost:5173` is
+ * that machine's own loopback, not this one's. A teammate that has just started
+ * the dev server has no way to know that, and the honest refusal it got back
+ * ("that address is this laptop") left it guessing — three runs in a row ended
+ * with a QA engineer unable to look at the app it had just built.
+ *
+ * When a preview is running for this room, its public URL is the same app, so
+ * the local address is rewritten to it and the substitution is stated in the
+ * result rather than done silently. When no preview is running, the error names
+ * the tool that starts one instead of describing the problem again.
+ */
+function resolveRemoteUrl(ctx: ToolContext, url: string): { url: string; note: string } | { error: string } {
+  const trimmed = url.trim()
+  if (!trimmed) return { url: '', note: '' }
+
+  let parsed: URL
+  try {
+    parsed = new URL(trimmed)
+  } catch {
+    return { url: trimmed, note: '' }
+  }
+  const host = parsed.hostname.toLowerCase()
+  const isLocal =
+    host === 'localhost' ||
+    host === '0.0.0.0' ||
+    host === '::1' ||
+    host.endsWith('.localhost') ||
+    /^127\./.test(host)
+  if (!isLocal) return { url: trimmed, note: '' }
+
+  const workspaces = ctx.deps.bus.getWorkspaces(ctx.roomId)
+  for (const workspace of workspaces) {
+    const preview = ctx.deps.exec.getPreview(ctx.roomId, workspace.id)
+    if (!preview?.publicUrl) continue
+    const target = new URL(preview.publicUrl)
+    target.pathname = parsed.pathname
+    target.search = parsed.search
+    target.hash = parsed.hash
+    return {
+      url: target.toString(),
+      note: `"${trimmed}" is this machine's loopback, which the remote browser cannot reach, so Huddle opened the preview URL for the same app instead: ${target.toString()}.`
+    }
+  }
+
+  return {
+    error:
+      `"${trimmed}" is an address on this machine, and the browser runs in Browserbase's cloud, so it cannot reach it. ` +
+      'Call start_preview first — it starts the dev server and exposes a public URL — then open the URL it returns.'
+  }
+}
+
 function capabilityGap(ctx: ToolContext, id: Capability['id']): string | null {
   const capability = ctx.deps.capability(id)
   if (capability.state === 'ready' || capability.state === 'starting') return null
@@ -836,8 +890,21 @@ const startPreview = defineTool<Record<string, never>>({
   async run(_args, ctx) {
     const missing = requireProject(ctx)
     if (missing) return { summary: 'No project bound', content: missing, error: missing }
-    const gap = capabilityGap(ctx, 'preview')
-    if (gap) return { summary: 'Preview unavailable', content: gap, error: gap }
+    /*
+     * Deliberately not gated on the `preview` capability.
+     *
+     * That capability reports whether a preview is *running*, and this is the
+     * tool that starts one — so gating on it meant `start_preview` refused with
+     * "No preview is running", every time, and the whole chain that lets the
+     * remote browser reach the local dev server was unreachable. Only a preview
+     * the human has switched off is a real reason not to try.
+     */
+    const preference = ctx.deps.settings().preview.mode
+    if (preference === 'off') {
+      const message =
+        'Exposing the dev server is turned off in Settings, so the remote browser cannot reach it. Set preview mode to tunnel or lan first.'
+      return { summary: 'Preview disabled', content: message, error: message }
+    }
     const workspace = await workspaceOf(ctx, false)
     const preview = await ctx.deps.exec.startPreview(ctx.roomId, workspace.id)
     const reachable = preview.publicUrl ?? preview.localUrl
@@ -867,10 +934,14 @@ const browserOpen = defineTool<{ url: string; label: string }>({
   async run(args, ctx) {
     const gap = capabilityGap(ctx, 'browserbase')
     if (gap) return { summary: 'Browserbase unavailable', content: gap, error: gap }
+    const resolved = resolveRemoteUrl(ctx, args.url)
+    if ('error' in resolved) {
+      return { summary: 'Local address', content: resolved.error, error: resolved.error }
+    }
     const session = await ctx.deps.browser.openSession({
       roomId: ctx.roomId,
       agentId: ctx.agentId,
-      url: args.url || undefined,
+      url: resolved.url || undefined,
       label: args.label || undefined
     })
     ctx.deps.bus.updateAgent(ctx.agentId, { browserSessionId: session.id })
@@ -879,8 +950,13 @@ const browserOpen = defineTool<{ url: string; label: string }>({
       return { summary: `Browser session ${session.status}`, content: message, error: message }
     }
     return {
-      summary: `Opened browser session at ${session.currentUrl ?? args.url ?? 'about:blank'}`,
-      content: `Session ${session.id} is live at ${session.currentUrl ?? 'about:blank'}. Live view: ${session.liveViewUrl ?? '(none)'}.`
+      summary: `Opened browser session at ${session.currentUrl ?? resolved.url ?? 'about:blank'}`,
+      content: [
+        `Session ${session.id} is live at ${session.currentUrl ?? 'about:blank'}. Live view: ${session.liveViewUrl ?? '(none)'}.`,
+        resolved.note
+      ]
+        .filter((part) => part.length > 0)
+        .join(' ')
     }
   }
 })
@@ -902,10 +978,15 @@ const browserNavigate = defineTool<{ sessionId: string; url: string }>({
       const message = 'You have no browser session yet. Call browser_open first.'
       return { summary: 'No browser session', content: message, error: message }
     }
-    const result = await ctx.deps.browser.act({ sessionId, action: { kind: 'navigate', url: args.url } })
+    const resolved = resolveRemoteUrl(ctx, args.url)
+    if ('error' in resolved) {
+      return { summary: 'Local address', content: resolved.error, error: resolved.error }
+    }
+    const result = await ctx.deps.browser.act({ sessionId, action: { kind: 'navigate', url: resolved.url } })
+    const prefix = resolved.note ? `${resolved.note} ` : ''
     return {
-      summary: result.ok ? `Navigated to ${args.url}` : `Navigation failed: ${result.detail}`,
-      content: `${result.detail}${result.observation ? `\n\nURL: ${result.observation.url}\nTitle: ${result.observation.title}\n${clip(result.observation.text, 3000)}` : ''}`,
+      summary: result.ok ? `Navigated to ${resolved.url}` : `Navigation failed: ${result.detail}`,
+      content: `${prefix}${result.detail}${result.observation ? `\n\nURL: ${result.observation.url}\nTitle: ${result.observation.title}\n${clip(result.observation.text, 3000)}` : ''}`,
       error: result.ok ? undefined : result.detail
     }
   }
@@ -1407,15 +1488,18 @@ const recordMemory = defineTool<{ kind: string; title: string; body: string }>({
   }
 })
 
-const submitWork = defineTool<{ summary: string; taskId: string; files: string[] }>({
+const submitWork = defineTool<{ summary: string; taskId: string; files: string[]; recheckedRevision: number }>({
   name: 'submit_work',
   description:
-    'Commit your workspace changes to your branch as a submission. Refuses when your task was planned against an older decision revision.',
+    'Commit your workspace changes to your branch as a submission. Refuses when your task was planned against an older decision revision — read the current decisions with list_decisions, then pass rechecked_against_revision to say the work still matches them.',
   parameters: schema(
     {
       summary: str('What this submission contains and how it was checked.'),
       task_id: str('Task this submission completes.'),
-      files: strList('Files you changed (for the record).')
+      files: strList('Files you changed (for the record).'),
+      rechecked_against_revision: num(
+        'The decision revision you have just re-read and confirmed this work still satisfies. Only pass it after calling list_decisions.'
+      )
     },
     ['summary']
   ),
@@ -1424,15 +1508,38 @@ const submitWork = defineTool<{ summary: string; taskId: string; files: string[]
     const summary = a.str('summary', { required: true, min: 4, max: 2000 })
     const taskId = a.str('task_id', { max: 120 })
     const files = a.list('files', { maxItems: 60, maxLength: 400 })
-    return a.finish(() => ({ summary, taskId, files }))
+    const recheckedRevision = a.num('rechecked_against_revision', { min: 0, max: 10_000 })
+    return a.finish(() => ({ summary, taskId, files, recheckedRevision }))
   },
   async run(args, ctx) {
     const task = args.taskId ? findTask(ctx, args.taskId) : ctx.taskId ? ctx.deps.bus.getTask(ctx.taskId) : null
     const room = ctx.deps.bus.getRoom(ctx.roomId)
     const revision = room?.decisionRevision ?? 0
-    if (task && plannedBefore(task, revision)) {
-      const message = `Refused: this task was planned against decision revision ${task.decisionRevision} but the room is at revision ${revision}. Re-plan against the current decisions (list_decisions) before submitting.`
+
+    /*
+     * The stale-revision guard needs a way out.
+     *
+     * Refusing work planned before a decision is right — it forces a re-check.
+     * But there was no way to *report* the re-check, so a teammate that had
+     * genuinely re-read the decisions and confirmed its work still matched was
+     * refused forever, its branch never reached integration, and the team
+     * verified a revision with half the work missing.
+     *
+     * Passing the current revision is the teammate asserting, on the record,
+     * that it read those decisions and this work satisfies them. The claim is
+     * carried into the submission summary so a human can check it.
+     */
+    const rechecked = args.recheckedRevision > 0 && args.recheckedRevision >= revision
+    if (task && plannedBefore(task, revision) && !rechecked) {
+      const message =
+        `Refused: this task was planned against decision revision ${task.decisionRevision} but the room is at revision ${revision}. ` +
+        `Call list_decisions, confirm this work still satisfies them, then submit again with rechecked_against_revision: ${revision}. ` +
+        'If it no longer satisfies them, change the work instead.'
       return { summary: 'Submission refused: stale decision revision', content: message, error: message, rejected: true }
+    }
+    if (task && rechecked) {
+      // The task is no longer stale: it has been re-checked against this one.
+      ctx.bridge.updateTask(task.id, { decisionRevision: revision })
     }
     const workspace = await workspaceOf(ctx, false)
     const result = await ctx.deps.exec.submitWork({

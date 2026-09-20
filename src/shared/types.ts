@@ -511,7 +511,20 @@ export interface AppSettings {
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
-  models: { contributor: 'gpt-6-astra', conversation: 'gpt-5.6-luna' },
+  /**
+   * Two slots, because the two jobs have different shapes.
+   *
+   * `contributor` runs the work loop, reasoning over real tool results.
+   * `conversation` answers out loud while that work continues, where latency is
+   * the whole point — a teammate that takes four seconds to say "on it" has
+   * already broken the illusion of a call.
+   *
+   * Both default to `deepseek-flash`: its chat API is OpenAI-compatible, it
+   * answers in about a second, it holds up on tool selection, and a whole demo
+   * run costs cents. Point either slot at an OpenAI model in Settings and the
+   * adapter routes that slot there instead.
+   */
+  models: { contributor: 'deepseek-flash', conversation: 'deepseek-flash' },
   voice: {
     enabled: true,
     inputDeviceId: null,

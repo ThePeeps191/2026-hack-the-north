@@ -32,6 +32,11 @@ export interface PatchHunk {
   body: PatchLine[]
   /** True when the declared line counts did not match the supplied body. */
   malformed: boolean
+  /**
+   * False for a bare `@@`: the hunk claims no position, so it can only be
+   * located by matching its context against the file.
+   */
+  positioned: boolean
   /** True when the patch marked the last line as having no trailing newline. */
   noTrailingNewline: boolean
 }
@@ -84,6 +89,8 @@ export interface PatchTargets {
  * ------------------------------------------------------------------ */
 
 const HUNK_HEADER = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(.*)$/
+/** `@@`, `@@@`, `@@ someHint` — a hunk marker that claims no line numbers. */
+const BARE_HUNK_HEADER = /^@@+\s*(.*?)\s*@*$/
 const SECTION_META = /^(index |new file mode|deleted file mode|old mode|new mode|similarity index|dissimilarity index|rename from|rename to|copy from|copy to)/
 const NO_NEWLINE_MARKER = '\\ No newline at end of file'
 
@@ -110,14 +117,30 @@ export function cleanPatchPath(raw: string): string | null {
 
 function parseHunkHeader(line: string): Omit<PatchHunk, 'body' | 'malformed' | 'noTrailingNewline'> | null {
   const match = HUNK_HEADER.exec(line)
-  if (!match) return null
-  return {
-    oldStart: Number.parseInt(match[1], 10),
-    oldCount: match[2] === undefined ? 1 : Number.parseInt(match[2], 10),
-    newStart: Number.parseInt(match[3], 10),
-    newCount: match[4] === undefined ? 1 : Number.parseInt(match[4], 10),
-    hint: match[5]?.trim() ?? ''
+  if (match) {
+    return {
+      oldStart: Number.parseInt(match[1], 10),
+      oldCount: match[2] === undefined ? 1 : Number.parseInt(match[2], 10),
+      newStart: Number.parseInt(match[3], 10),
+      newCount: match[4] === undefined ? 1 : Number.parseInt(match[4], 10),
+      hint: match[5]?.trim() ?? '',
+      positioned: true
+    }
   }
+  /*
+   * A bare `@@`, with no line numbers.
+   *
+   * Models emit this constantly — it is the shape used by every context-only
+   * patch format — and it is strictly *more* reliable than a numbered header,
+   * because the numbers are the part they get wrong. `oldStart: 0` means "no
+   * claimed position"; the applier locates the hunk by matching its context
+   * against the file, which it has to do anyway.
+   */
+  const bare = BARE_HUNK_HEADER.exec(line)
+  if (bare) {
+    return { oldStart: 0, oldCount: 0, newStart: 0, newCount: 0, hint: bare[1]?.trim() ?? '', positioned: false }
+  }
+  return null
 }
 
 function parseDiffGitPaths(line: string): { oldPath: string | null; newPath: string | null } {
@@ -137,10 +160,72 @@ function parseDiffGitPaths(line: string): { oldPath: string | null; newPath: str
   return { oldPath: null, newPath: null }
 }
 
+/**
+ * Rewrites the `*** Begin Patch` envelope into an ordinary unified diff.
+ *
+ * Models reach for this shape constantly — it is the format several of them
+ * were trained to emit — and Huddle used to reject it with "*** End Patch
+ * follows a hunk but is not part of it", which tells the model nothing about
+ * what it did wrong. The envelope carries exactly the same information as a
+ * `---`/`+++` header, so it is translated rather than refused.
+ *
+ * Returns the input unchanged when there is no envelope.
+ */
+export function normalizePatchEnvelope(patch: string): string {
+  const source = patch.replace(/\r\n/g, '\n')
+  // Any `*** ` marker means the model reached for this dialect, even if it only
+  // remembered half of it: a plain unified diff wrapped in a stray
+  // `*** End Patch` is common, and rejecting it teaches the model nothing.
+  if (!/^\s*\*\*\* (Begin Patch|End Patch|Update File|Add File|Delete File|Move to)\b/im.test(source)) {
+    return patch
+  }
+
+  const out: string[] = []
+  for (const line of source.split('\n')) {
+    const trimmed = line.trim()
+    // Casing varies between models: `*** End patch` is as common as `*** End Patch`.
+    if (/^\*\*\* (Begin|End) Patch$/i.test(trimmed)) continue
+
+    const update = /^\*\*\* Update File:\s*(.+?)\s*$/i.exec(trimmed)
+    if (update) {
+      const path = update[1]
+      out.push(`--- a/${path}`, `+++ b/${path}`)
+      continue
+    }
+    // Add and Delete sections carry their body straight after the header with
+    // no `@@` of their own, so one is supplied: there is exactly one place the
+    // contents of a new or removed file can go.
+    const add = /^\*\*\* Add File:\s*(.+?)\s*$/i.exec(trimmed)
+    if (add) {
+      out.push('--- /dev/null', `+++ b/${add[1]}`, '@@')
+      continue
+    }
+    const remove = /^\*\*\* Delete File:\s*(.+?)\s*$/i.exec(trimmed)
+    if (remove) {
+      out.push(`--- a/${remove[1]}`, '+++ /dev/null', '@@')
+      continue
+    }
+    const move = /^\*\*\* Move to:\s*(.+?)\s*$/i.exec(trimmed)
+    if (move) {
+      // A rename is expressed by the section that follows; the destination
+      // replaces the `+++` line that was just written for the source.
+      for (let index = out.length - 1; index >= 0; index -= 1) {
+        if (out[index].startsWith('+++ ')) {
+          out[index] = `+++ b/${move[1]}`
+          break
+        }
+      }
+      continue
+    }
+    out.push(line)
+  }
+  return out.join('\n')
+}
+
 export function parseUnifiedDiff(patch: string): ParsedPatch {
   const errors: string[] = []
   const files: PatchFileSection[] = []
-  const lines = patch.replace(/\r\n/g, '\n').split('\n')
+  const lines = normalizePatchEnvelope(patch).replace(/\r\n/g, '\n').split('\n')
   // A patch that ends with a newline always leaves one empty element behind
   // from the split. It is an artefact of the terminator, not a line of the
   // patch: dropping it is what lets a real `git diff` parse.
@@ -206,13 +291,39 @@ export function parseUnifiedDiff(patch: string): ParsedPatch {
         index += 1
         continue
       }
+      /*
+       * A hunk ends where its body ends, not where its header claims it does.
+       *
+       * The `@@ -a,b +c,d @@` counts are derived data: they can be recomputed
+       * from the body, and a model gets them wrong constantly — miscounting by
+       * one turned a correct edit into "Line 30 follows a hunk but is not part
+       * of it" and cost a teammate its turn. So the body is read until a line
+       * that cannot belong to a hunk, and the counts are taken from what was
+       * actually supplied.
+       *
+       * This does not weaken rule 1. Every context and removed line is still
+       * matched against the real bytes on disk before anything is written, so a
+       * hunk that over-reads is rejected there, precisely, instead of here on
+       * the strength of the model's arithmetic.
+       */
       const body: PatchLine[] = []
       let oldSeen = 0
       let newSeen = 0
       let noTrailingNewline = false
       let cursor = index + 1
-      while (cursor < lines.length && (oldSeen < header.oldCount || newSeen < header.newCount)) {
+      while (cursor < lines.length) {
         const candidate = lines[cursor]
+        // A new file section or hunk starts here, even though `---` and `+++`
+        // would otherwise read as a removed and an added line.
+        if (
+          candidate.startsWith('@@') ||
+          candidate.startsWith('diff --git ') ||
+          candidate.startsWith('--- ') ||
+          candidate.startsWith('+++ ') ||
+          SECTION_META.test(candidate)
+        ) {
+          break
+        }
         const marker = candidate.charAt(0)
         if (marker === ' ') {
           body.push({ kind: 'context', text: candidate.slice(1) })
@@ -236,19 +347,22 @@ export function parseUnifiedDiff(patch: string): ParsedPatch {
         }
         cursor += 1
       }
+      // Kept for reporting only: a disagreement is worth knowing about when a
+      // patch fails for some other reason, but it is not itself a failure.
       const malformed = oldSeen !== header.oldCount || newSeen !== header.newCount
       // git emits `\ No newline at end of file` after the last line of a hunk.
       if (cursor < lines.length && lines[cursor].startsWith(NO_NEWLINE_MARKER)) {
         noTrailingNewline = true
         cursor += 1
       }
-      if (malformed) {
-        errors.push(
-          `Hunk ${header.oldStart},${header.oldCount} -> ${header.newStart},${header.newCount} declares ` +
-            `${header.oldCount} old and ${header.newCount} new lines but the patch supplies ${oldSeen} and ${newSeen}.`
-        )
-      }
-      current.hunks.push({ ...header, body, malformed, noTrailingNewline })
+      current.hunks.push({
+        ...header,
+        oldCount: oldSeen,
+        newCount: newSeen,
+        body,
+        malformed,
+        noTrailingNewline
+      })
       index = cursor
       continue
     }
@@ -410,9 +524,10 @@ async function planSection(
   if (section.binary) {
     return { error: `Cannot apply a binary patch to ${path}; Huddle only applies text patches.`, path }
   }
-  if (section.hunks.some((hunk) => hunk.malformed)) {
-    return { error: `The hunk for ${path} is malformed (declared line counts do not match the body).`, path }
-  }
+  // A header whose counts disagree with its body is no longer a rejection: the
+  // counts are derived data and the body is authoritative. What still protects
+  // the file is that every context and removed line below is matched against
+  // the real bytes before anything is written.
 
   const isAdd = section.oldPath === null
   const isDelete = section.newPath === null
@@ -450,6 +565,19 @@ async function planSection(
     const hunk = section.hunks[hunkIndex]
     // `@@ -l,0 +n,m @@` inserts *after* old line l, so a zero-count hunk anchors
     // one line later than a normal hunk.
+    // A bare `@@` with nothing to anchor against could go anywhere in the file.
+    // Guessing would silently put code in the wrong place, so it is refused
+    // with the one thing that fixes it. A numbered header says where it goes,
+    // and a brand-new file has only one possible position, so neither applies.
+    if (!hunk.positioned && !isAdd && !hunk.body.some((line) => line.kind !== 'add')) {
+      return {
+        error:
+          `Hunk ${hunkIndex + 1} of ${section.hunks.length} in ${path} is a bare "@@" with no line numbers and no ` +
+          'context lines, so there is no way to tell where it belongs. Include a few unchanged lines around the ' +
+          'change, or give the hunk real line numbers.',
+        path
+      }
+    }
     const anchor = hunk.oldCount === 0 ? hunk.oldStart : hunk.oldStart - 1
     const expected = Math.max(0, anchor + delta)
     const match = locateHunk(working, hunk, expected)

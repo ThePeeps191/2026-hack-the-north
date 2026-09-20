@@ -1,5 +1,5 @@
 /**
- * Live OpenAI probe.
+ * Live model-backend probe.
  *
  * Run it by hand to prove which endpoint, transport and model this account can
  * actually serve before trusting the adapter — and to record the answer:
@@ -16,8 +16,20 @@
 
 import { createDefaultProvider, PROBE_MAX_OUTPUT_TOKENS, type ProviderToolDefinition } from './provider.ts'
 
-const CANDIDATE_MODELS = ['gpt-5.6-luna', 'gpt-5.6-terra', 'gpt-5.6-sol', 'gpt-6-astra', 'gpt-5.5', 'gpt-5.4']
-const PRIMARY_MODEL = 'gpt-5.6-luna'
+/** Every model this build might reasonably be configured to use, any backend. */
+const CANDIDATE_MODELS = [
+  'deepseek-flash',
+  'deepseek-v4-pro',
+  'gpt-5.6-luna',
+  'gpt-5.6-terra',
+  'gpt-5.6-sol',
+  'gpt-6-astra'
+]
+
+/** Overridable so a probe can target whichever backend is being checked. */
+const PRIMARY_MODEL =
+  process.argv.find((argument) => argument.startsWith('--model='))?.slice('--model='.length) ??
+  'deepseek-flash'
 
 const PROBE_TOOL: ProviderToolDefinition = {
   name: 'huddle_probe',

@@ -82,6 +82,14 @@ import type {
 export const MAX_PARALLEL_RUNS_PER_ROOM = 5
 
 /**
+ * How long the team waits for a project folder before introducing itself.
+ *
+ * Long enough for a human to click "Use the demo project" after creating the
+ * room; short enough that a room which will never have one is not left silent.
+ */
+export const ONBOARDING_PROJECT_GRACE_MS = 20_000
+
+/**
  * A task title from a spoken instruction.
  *
  * People do not speak in task titles. "Maya, actually stop and do some research
@@ -1106,6 +1114,16 @@ export class HuddleAgentRuntime implements AgentRuntime, RuntimeBridge {
     try {
       const room = this.deps.bus.getRoom(roomId)
       if (!room || !room.goal.trim()) return
+
+      // Give the human a moment to bind a project before anyone speaks.
+      //
+      // The natural flow is: create the room, then choose the folder. Without
+      // this, the team introduced itself in the half-second between the two and
+      // every teammate opened with "I need this room bound to a repo" about a
+      // repo it was handed a second later. Bounded, so a room that never gets a
+      // project still gets its introductions.
+      await this.waitForProject(roomId)
+
       const agents = this.deps.bus.getAgents(roomId)
       const spoke = new Set(
         this.deps.bus
@@ -1123,6 +1141,27 @@ export class HuddleAgentRuntime implements AgentRuntime, RuntimeBridge {
       }
     } finally {
       this.onboardingInFlight.delete(roomId)
+    }
+  }
+
+  /**
+   * Waits for a project binding, up to `ONBOARDING_PROJECT_GRACE_MS`.
+   *
+   * Returns as soon as one appears, and returns anyway once the grace is spent
+   * — a room with no project is a legitimate room, and the team says so rather
+   * than waiting silently for something that is never coming.
+   */
+  private async waitForProject(roomId: string): Promise<void> {
+    const deadline = Date.now() + ONBOARDING_PROJECT_GRACE_MS
+    while (Date.now() < deadline) {
+      if (!this.attachedRooms.has(roomId)) return
+      if (this.deps.bus.getRoom(roomId)?.project) return
+      // Anything already queued means the room is in use; stop stalling.
+      const waiting = this.deps.bus
+        .getAgents(roomId)
+        .some((agent) => this.mailbox.size(agent.id) > 0)
+      if (waiting) return
+      await new Promise((resolve) => setTimeout(resolve, 250))
     }
   }
 

@@ -5,6 +5,7 @@ import {
   createDeadline,
   createDefaultProvider,
   looksLikeTransportMismatch,
+  backendForModel,
   OpenAiProviderAdapter,
   toChatMessages,
   toChatTools,
@@ -123,13 +124,13 @@ describe('provider errors', () => {
 
 describe('missing credentials', () => {
   test('no key produces a configured:false adapter, not a crash', () => {
-    const provider = createDefaultProvider({ apiKey: '' })
+    const provider = createDefaultProvider({ apiKey: { openai: '', deepseek: '' } })
     assert.equal(provider.configured, false)
-    assert.equal(provider.status().detail, 'No OpenAI API key')
+    assert.equal(provider.status().detail, 'No model API key')
   })
 
   test('the first call raises openai_missing with a concrete fix', async () => {
-    const provider = createDefaultProvider({ apiKey: '' })
+    const provider = createDefaultProvider({ apiKey: { openai: '', deepseek: '' } })
     await assert.rejects(
       () =>
         provider.complete({
@@ -142,16 +143,64 @@ describe('missing credentials', () => {
       (error: unknown) => {
         assert.ok(error instanceof HuddleError)
         assert.equal(error.code, 'openai_missing')
-        assert.match(error.message, /OpenAI is not configured/)
-        assert.match(error.fix ?? '', /OPENAI_API_KEY in Settings/)
+        assert.match(error.message, /No model provider is configured/)
+        assert.match(error.fix ?? '', /OPENAI_API_KEY or DEEPSEEK_API_KEY/)
         return true
       }
     )
   })
 
   test('listModels also refuses cleanly', async () => {
-    const provider = createDefaultProvider({ apiKey: '' })
-    await assert.rejects(() => provider.listModels(), /OpenAI is not configured/)
+    const provider = createDefaultProvider({ apiKey: { openai: '', deepseek: '' } })
+    await assert.rejects(() => provider.listModels(), /No model provider is configured/)
+  })
+})
+
+describe('choosing a backend from the model id', () => {
+  test('a deepseek model id routes to DeepSeek, everything else to OpenAI', () => {
+    assert.equal(backendForModel('deepseek-flash').id, 'deepseek')
+    assert.equal(backendForModel('deepseek-v4-pro').id, 'deepseek')
+    assert.equal(backendForModel('gpt-5.6-luna').id, 'openai')
+    assert.equal(backendForModel('o3-mini').id, 'openai')
+    // An id nobody recognises is not a reason to guess a vendor.
+    assert.equal(backendForModel('some-new-model').id, 'openai')
+  })
+
+  test('DeepSeek is chat-only, so it never probes an endpoint it does not have', () => {
+    const adapter = new OpenAiProviderAdapter({ deepseek: 'sk-test' })
+    assert.equal(adapter.transport(), 'chat')
+    assert.deepEqual(backendForModel('deepseek-flash').transports, ['chat'])
+  })
+
+  test('a model whose backend has no key is refused, never silently rerouted', async () => {
+    // Quietly answering a gpt-* request with DeepSeek would make every later
+    // report about which model did the work untrue.
+    const adapter = new OpenAiProviderAdapter({ deepseek: 'sk-test', openai: '' })
+    assert.equal(adapter.configured, true)
+    await assert.rejects(
+      () =>
+        adapter.complete({
+          model: 'gpt-5.6-luna',
+          instructions: 'x',
+          input: [{ kind: 'text', role: 'user', content: 'hi' }],
+          tools: [],
+          maxOutputTokens: 16
+        }),
+      (error: unknown) => {
+        assert.ok(error instanceof HuddleError)
+        assert.equal(error.code, 'openai_missing')
+        assert.match(error.message, /OpenAI model and OpenAI has no API key/)
+        assert.match(error.fix ?? '', /DeepSeek model in Settings/)
+        return true
+      }
+    )
+  })
+
+  test('the status line names every backend that can actually serve a turn', () => {
+    const both = new OpenAiProviderAdapter({ deepseek: 'sk-a', openai: 'sk-b' })
+    const detail = both.status().detail
+    assert.match(detail, /DeepSeek/)
+    assert.match(detail, /OpenAI/)
   })
 })
 
@@ -179,11 +228,52 @@ describe('deadlines', () => {
 })
 
 describe('transport selection', () => {
-  test('the Responses API is preferred and can be switched explicitly', () => {
+  test('OpenAI prefers the Responses API and can be switched explicitly', () => {
     const adapter = new OpenAiProviderAdapter('sk-test')
     assert.equal(adapter.transport(), 'responses')
+    assert.match(adapter.status().detail, /Responses API/)
     adapter.setTransport('chat')
     assert.equal(adapter.transport(), 'chat')
-    assert.match(adapter.status().detail, /Chat completions/)
+    assert.match(adapter.status().detail, /chat completions/)
+  })
+})
+
+describe('an account with no credit left', () => {
+  const outOfCredit = (status: number, message: string): HuddleError =>
+    toProviderError(Object.assign(new Error(message), { status }), 'a turn', 'DeepSeek')
+
+  test('DeepSeek 402 is reported as no credit, with somewhere to fix it', () => {
+    const error = outOfCredit(402, '402 Insufficient Balance')
+    assert.equal(error.code, 'openai_out_of_credit')
+    assert.match(error.message, /DeepSeek has no credit left/)
+    assert.match(error.fix ?? '', /platform\.deepseek\.com/)
+  })
+
+  test("OpenAI's 429 for an empty balance is not mistaken for a rate limit", () => {
+    // Waiting fixes a rate limit and never fixes this, so telling a person to
+    // "wait a moment and retry" would send them in a circle.
+    const error = toProviderError(
+      Object.assign(new Error('You have no credits remaining. insufficient_quota'), { status: 429 }),
+      'a turn',
+      'OpenAI'
+    )
+    assert.equal(error.code, 'openai_out_of_credit')
+    assert.match(error.fix ?? '', /platform\.openai\.com/)
+  })
+
+  test('a genuine rate limit still reads as a rate limit', () => {
+    const error = toProviderError(
+      Object.assign(new Error('Rate limit reached for requests'), { status: 429 }),
+      'a turn',
+      'OpenAI'
+    )
+    assert.equal(error.code, 'openai_rate_limited')
+  })
+
+  test('the vendor in the message is the one that actually failed', () => {
+    // Every error used to say "OpenAI failed", including DeepSeek's.
+    const error = toProviderError(new Error('boom'), 'a turn', 'DeepSeek')
+    assert.match(error.message, /^DeepSeek failed/)
+    assert.doesNotMatch(error.message, /OpenAI/)
   })
 })

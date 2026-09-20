@@ -321,6 +321,7 @@ export function registerIpcHandlers(host: IpcHost, getWindow: () => BrowserWindo
     const kind = value.kind === 'demo' ? 'demo' : 'existing'
     const binding = await host.exec.bindProject(roomId, rootPath, kind)
     const room = await service.bindProject(roomId, binding)
+    await prepareTeamWorkspace(host, roomId)
     await attachRuntime(host, roomId)
     service.notice(
       roomId,
@@ -338,6 +339,7 @@ export function registerIpcHandlers(host: IpcHost, getWindow: () => BrowserWindo
     const target = host.exec.suggestDemoPath(id)
     const binding = await host.exec.bindProject(id, target, 'demo')
     const room = await service.bindProject(id, binding)
+    await prepareTeamWorkspace(host, id)
     await attachRuntime(host, id)
     service.notice(
       id,
@@ -674,6 +676,31 @@ async function attachRuntime(host: IpcHost, roomId: string): Promise<void> {
       roomId,
       'warn',
       'The team could not attach to this room.',
+      toErrorShape(error).message
+    )
+  }
+}
+
+/**
+ * Creates the Team workspace the moment a project is bound.
+ *
+ * It used to be created lazily, the first time an agent happened to call a tool
+ * that needed one — which meant that after binding a folder the Code, Terminal,
+ * Files and Browser tabs all read "No project bound" until somebody got a
+ * teammate to do something. The workspace is what those surfaces read, so it
+ * has to exist as soon as there is a project for it to point at.
+ *
+ * A failure here never fails the bind: the project is still bound, and the
+ * reason the workspace could not be prepared is reported as itself.
+ */
+async function prepareTeamWorkspace(host: IpcHost, roomId: string): Promise<void> {
+  try {
+    await host.exec.ensureTeamWorkspace(roomId)
+  } catch (error) {
+    host.service.notice(
+      roomId,
+      'warn',
+      'The project is bound, but the Team workspace could not be prepared, so the workspace tabs are empty.',
       toErrorShape(error).message
     )
   }

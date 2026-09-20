@@ -91,7 +91,8 @@ export default function App(): JSX.Element {
     return (
       <LaunchScreen
         rooms={snapshot.rooms}
-        onCreate={(name, agentCount) => actions.createRoom({ name, agentCount })}
+        capabilities={snapshot.capabilities}
+        onCreate={(name, goal, agentCount) => actions.createRoom({ name, goal, agentCount })}
         onOpen={(roomId) => void actions.selectRoom(roomId)}
       />
     )

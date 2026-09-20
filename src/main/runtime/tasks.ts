@@ -92,7 +92,17 @@ export function applyTaskPatch(task: Task, patch: TaskPatch, now: string): Task 
   if (patch.dependsOn !== undefined) next.dependsOn = [...patch.dependsOn]
   if (patch.acceptance !== undefined) next.acceptance = [...patch.acceptance].slice(0, 12)
   if (patch.blockedReason !== undefined) next.blockedReason = patch.blockedReason
-  if (patch.decisionRevision !== undefined) next.decisionRevision = patch.decisionRevision
+  if (patch.decisionRevision !== undefined) {
+    // Moving a task forward to a newer decision revision *is* re-planning it,
+    // so the stale flag that the revision bump raised comes off with it. Without
+    // this the flag was permanent: a teammate could re-check its work against
+    // the new decision and still never be allowed to submit it.
+    if (patch.decisionRevision > next.decisionRevision) {
+      next.staleSince = null
+      next.staleReason = null
+    }
+    next.decisionRevision = patch.decisionRevision
+  }
   if (patch.evidence !== undefined) next.evidence = [...patch.evidence]
   return next
 }

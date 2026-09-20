@@ -89,6 +89,14 @@ export interface RailProps {
 }
 
 export function Rail(props: RailProps): JSX.Element {
+  /**
+   * Whether the human is actually in this room's call.
+   *
+   * The transcript uses it to decide whether "this line was never spoken" is
+   * worth saying: before you join there is no audio to miss, so the note is
+   * noise on every single message rather than information.
+   */
+  const inCall = props.call.connection === 'connected' && props.call.roomId === props.room.id
   const {
     room,
     agents,
@@ -249,6 +257,7 @@ export function Rail(props: RailProps): JSX.Element {
               decisions={decisions}
               artifacts={artifacts}
               speaking={speaking}
+              inCall={inCall}
               privateAgentId={spotlightAgent.id}
               emptyDetail={`Ask ${spotlightAgent.name} anything. The other teammates never receive these messages.`}
               onReplyTo={onReplyTo}
@@ -263,6 +272,7 @@ export function Rail(props: RailProps): JSX.Element {
               decisions={decisions}
               artifacts={artifacts}
               speaking={speaking}
+              inCall={inCall}
               privateAgentId={null}
               emptyDetail="Say something to get the team moving, or ask one teammate for a status."
               onReplyTo={onReplyTo}

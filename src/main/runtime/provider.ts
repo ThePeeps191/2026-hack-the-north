@@ -1,13 +1,23 @@
 /**
- * OpenAI adapter.
+ * The model adapter.
  *
- * One seam between the runtime and the provider: text in, assistant text plus
- * requested tool calls out, deltas streamed as they arrive. Everything the
- * runtime knows about HTTP, streaming shapes and provider errors stops here.
+ * One seam between the runtime and whichever model backend is serving a turn:
+ * text in, assistant text plus requested tool calls out, deltas streamed as
+ * they arrive. Everything the runtime knows about HTTP, streaming shapes and
+ * provider errors stops here.
  *
- * Transport: the Responses API is preferred. If the account, model or endpoint
- * cannot serve a Responses request, the adapter falls back to chat completions
- * for the rest of the session and says so, rather than failing the turn.
+ * Backends: OpenAI and DeepSeek. Both speak the OpenAI wire format, so one
+ * client library serves both and the backend is chosen from the model id —
+ * `deepseek-*` goes to DeepSeek, everything else to OpenAI. A room can run its
+ * deep work on one backend and its fast conversation on the other, and a
+ * backend with no key configured simply reports itself as unavailable instead
+ * of failing a turn in a confusing way.
+ *
+ * Transport: the Responses API is preferred where the backend has one. If the
+ * account, model or endpoint cannot serve a Responses request, the adapter
+ * falls back to chat completions for the rest of the session and says so,
+ * rather than failing the turn. DeepSeek serves chat completions only, so its
+ * requests start there and never probe for an endpoint that does not exist.
  *
  * Honesty rules kept here:
  *  - a call that produces neither text nor a tool call is an error, never an
@@ -18,7 +28,80 @@
 
 import OpenAI from 'openai'
 import { HuddleError } from '../huddle-error.ts'
-import { getSecret, redact } from '../config/secrets.ts'
+import { getSecret, redact, type SecretKey } from '../config/secrets.ts'
+
+/* ------------------------------------------------------------------ *
+ * Backends
+ * ------------------------------------------------------------------ */
+
+export type BackendId = 'openai' | 'deepseek'
+
+export interface ProviderBackend {
+  id: BackendId
+  label: string
+  /** Undefined means the client library's own default (OpenAI). */
+  baseURL: string | undefined
+  secret: SecretKey
+  /** Transports this backend can actually serve, best first. */
+  transports: readonly ProviderTransport[]
+  /** Model id prefixes that belong to this backend. */
+  prefixes: readonly string[]
+  /** Shown when the key is missing. */
+  missingFix: string
+  /**
+   * Extra output budget this backend needs beyond the answer the caller asked
+   * for.
+   *
+   * DeepSeek thinks in-band: its chat completions spend tokens on hidden
+   * `reasoning_content` that count against the same ceiling as the visible
+   * answer. Ask it for 500 tokens and it can spend all 500 thinking and return
+   * an empty `content` with `finish_reason: "length"` — which is how a teammate
+   * ended a real run with "stopped without a report". `maxOutputTokens` means
+   * "tokens of answer I want", so the headroom is added here rather than being
+   * guessed at by every caller.
+   */
+  outputBudget: (requested: number) => number
+}
+
+export const PROVIDER_BACKENDS: readonly ProviderBackend[] = [
+  {
+    id: 'deepseek',
+    label: 'DeepSeek',
+    baseURL: 'https://api.deepseek.com',
+    secret: 'DEEPSEEK_API_KEY',
+    // DeepSeek exposes an OpenAI-compatible chat-completions API and nothing
+    // else. Probing for /responses here would only waste a round trip on a 404.
+    transports: ['chat'],
+    prefixes: ['deepseek'],
+    missingFix: 'Add DEEPSEEK_API_KEY in Settings, then retry.',
+    // Generous: thinking is cheap here, and a truncated answer costs a turn.
+    outputBudget: (requested) => Math.min(8192, requested * 3 + 1024)
+  },
+  {
+    id: 'openai',
+    label: 'OpenAI',
+    baseURL: undefined,
+    secret: 'OPENAI_API_KEY',
+    transports: ['responses', 'chat'],
+    prefixes: ['gpt', 'o1', 'o3', 'o4', 'chatgpt'],
+    missingFix: 'Add OPENAI_API_KEY in Settings, then retry.',
+    // The Responses API bills reasoning separately, so the ask is the ask.
+    outputBudget: (requested) => requested
+  }
+]
+
+/** The backend that serves this model id. Unknown ids go to OpenAI. */
+export function backendForModel(model: string): ProviderBackend {
+  const id = model.trim().toLowerCase()
+  for (const backend of PROVIDER_BACKENDS) {
+    if (backend.prefixes.some((prefix) => id.startsWith(prefix))) return backend
+  }
+  return PROVIDER_BACKENDS[PROVIDER_BACKENDS.length - 1] as ProviderBackend
+}
+
+export function backendById(id: BackendId): ProviderBackend {
+  return PROVIDER_BACKENDS.find((backend) => backend.id === id) ?? (PROVIDER_BACKENDS[1] as ProviderBackend)
+}
 
 /* ------------------------------------------------------------------ *
  * Public shapes
@@ -112,8 +195,11 @@ export interface OpenAiProvider {
 }
 
 export interface OpenAiProviderOptions {
-  /** Defaults to the repo secret store. */
-  apiKey?: string
+  /**
+   * Defaults to the repo secret store. A bare string is the OpenAI key; a map
+   * configures several backends at once.
+   */
+  apiKey?: string | Partial<Record<BackendId, string>>
   /** Retries inside one call. Default 0: the runtime owns retry policy. */
   maxRetries?: number
   timeoutMs?: number
@@ -124,8 +210,9 @@ export interface OpenAiProviderOptions {
 export const DEFAULT_PROVIDER_TIMEOUT_MS = 90_000
 export const PROBE_MAX_OUTPUT_TOKENS = 32
 
-const MISSING_KEY_MESSAGE = 'OpenAI is not configured, so teammates cannot reason yet.'
-const MISSING_KEY_FIX = 'Add OPENAI_API_KEY in Settings, then retry. Typed interaction and room state still work.'
+const MISSING_KEY_MESSAGE = 'No model provider is configured, so teammates cannot reason yet.'
+const MISSING_KEY_FIX =
+  'Add OPENAI_API_KEY or DEEPSEEK_API_KEY in Settings, then retry. Typed interaction and room state still work.'
 
 /* ------------------------------------------------------------------ *
  * Request building (pure, unit-testable)
@@ -232,6 +319,18 @@ export function toChatTools(
   }))
 }
 
+/**
+ * DeepSeek's chain of thought, which rides alongside the answer in a field the
+ * OpenAI types do not describe. Huddle never shows it and never treats it as an
+ * answer: it is read only to tell "said nothing" apart from "was cut off while
+ * it was still thinking", which need different fixes.
+ */
+function reasoningTextOf(message: unknown): string {
+  if (typeof message !== 'object' || message === null) return ''
+  const value = (message as { reasoning_content?: unknown }).reasoning_content
+  return typeof value === 'string' ? value : ''
+}
+
 /* ------------------------------------------------------------------ *
  * Error translation
  * ------------------------------------------------------------------ */
@@ -273,19 +372,68 @@ export function looksLikeTransportMismatch(error: unknown): boolean {
   )
 }
 
-export function toProviderError(error: unknown, label: string): HuddleError {
+/** Where each vendor is topped up, so an out-of-credit error is actionable. */
+const BILLING_URL: Record<string, string> = {
+  OpenAI: 'https://platform.openai.com/settings/organization/billing',
+  DeepSeek: 'https://platform.deepseek.com/top_up'
+}
+
+/**
+ * True when the provider is refusing because the account has no money left.
+ *
+ * Vendors disagree about how to say this — DeepSeek returns 402, OpenAI
+ * returns 429 with `insufficient_quota` — and it is worth telling apart from a
+ * rate limit, because waiting fixes a rate limit and nothing fixes this except
+ * paying. Getting it wrong sends someone to retry a button for ten minutes.
+ */
+function looksOutOfCredit(status: number | null, message: string): boolean {
+  if (status === 402) return true
+  const text = message.toLowerCase()
+  return (
+    text.includes('insufficient balance') ||
+    text.includes('insufficient_quota') ||
+    text.includes('credit_balance_exhausted') ||
+    text.includes('no credits remaining') ||
+    text.includes('exceeded your current quota')
+  )
+}
+
+/** The env var a person has to set for this vendor, named in the fix text. */
+function secretNameFor(vendor: string): string {
+  const backend = PROVIDER_BACKENDS.find((candidate) => candidate.label === vendor)
+  return backend ? backend.secret : 'OPENAI_API_KEY'
+}
+
+export function toProviderError(error: unknown, label: string, vendor = 'The model provider'): HuddleError {
   if (error instanceof HuddleError) return error
 
   const status = statusOf(error)
   const message = redact(textOf(error)).slice(0, 400)
+  const billing = BILLING_URL[vendor]
+
+  // Checked before anything else: a vendor can report it as 402, as 429, or as
+  // a plain 400, and every one of those means the same thing.
+  if (looksOutOfCredit(status, message)) {
+    return new HuddleError(
+      'openai_out_of_credit',
+      `${vendor} has no credit left on this account, so no teammate can reason. Nothing was changed in the project.`,
+      billing
+        ? `Add credit at ${billing}, or switch to another provider's model in Settings.`
+        : "Top up the account, or switch to another provider's model in Settings."
+    )
+  }
 
   if (error instanceof OpenAI.APIConnectionTimeoutError) {
-    return new HuddleError('openai_timeout', `OpenAI stopped responding while ${label}.`, 'Retry the turn, or pick a faster model in Settings.')
+    return new HuddleError(
+      'openai_timeout',
+      `${vendor} stopped responding while ${label}.`,
+      'Retry the turn, or pick a faster model in Settings.'
+    )
   }
   if (error instanceof OpenAI.APIConnectionError) {
     return new HuddleError(
       'openai_unreachable',
-      `Huddle could not reach OpenAI while ${label} (${message}).`,
+      `Huddle could not reach ${vendor} while ${label} (${message}).`,
       'Check the network connection and proxy settings, then retry.'
     )
   }
@@ -295,31 +443,31 @@ export function toProviderError(error: unknown, label: string): HuddleError {
     case 403:
       return new HuddleError(
         'openai_auth',
-        'OpenAI rejected the API key, so no teammate could answer.',
-        'Paste a valid OPENAI_API_KEY in Settings.'
+        `${vendor} rejected the API key, so no teammate could answer.`,
+        `Paste a valid ${secretNameFor(vendor)} in Settings.`
       )
     case 404:
       return new HuddleError(
         'openai_model_unavailable',
-        `OpenAI did not recognise the model or endpoint used for ${label} (${message}).`,
+        `${vendor} did not recognise the model or endpoint used for ${label} (${message}).`,
         'Pick a different model in Settings, then retry.'
       )
     case 400:
       return new HuddleError(
         'openai_bad_request',
-        `OpenAI refused the request while ${label}: ${message}`,
+        `${vendor} refused the request while ${label}: ${message}`,
         'This is usually a model or tool-schema mismatch; change the model in Settings.'
       )
     case 413:
       return new HuddleError(
         'openai_context_too_large',
-        `The conversation sent to OpenAI was too large while ${label}.`,
+        `The conversation sent to ${vendor} was too large while ${label}.`,
         'Start a new task or ask the teammate to summarise before continuing.'
       )
     case 429:
       return new HuddleError(
         'openai_rate_limited',
-        `OpenAI rate-limited Huddle while ${label}.`,
+        `${vendor} rate-limited Huddle while ${label}.`,
         'Wait a moment before retrying, or lower concurrent work in Settings.'
       )
     default:
@@ -329,16 +477,16 @@ export function toProviderError(error: unknown, label: string): HuddleError {
   if (status !== null && status >= 500) {
     return new HuddleError(
       'openai_unavailable',
-      `OpenAI returned ${status} while ${label}.`,
+      `${vendor} returned ${status} while ${label}.`,
       'Retry in a moment; nothing was changed in the project.'
     )
   }
 
   if (error instanceof OpenAI.APIUserAbortError) {
-    return new HuddleError('openai_aborted', `The OpenAI request was cancelled while ${label}.`)
+    return new HuddleError('openai_aborted', `The ${vendor} request was cancelled while ${label}.`)
   }
 
-  return new HuddleError('openai_error', `OpenAI failed while ${label}: ${message}`, 'Retry the turn.')
+  return new HuddleError('openai_error', `${vendor} failed while ${label}: ${message}`, 'Retry the turn.')
 }
 
 /* ------------------------------------------------------------------ *
@@ -383,83 +531,146 @@ export function createDeadline(timeoutMs: number, external?: AbortSignal): Deadl
 
 export class OpenAiProviderAdapter implements OpenAiProvider {
   readonly configured: boolean
-  private client: OpenAI | null
-  private activeTransport: ProviderTransport = 'responses'
+  private readonly keys: Partial<Record<BackendId, string>>
+  private readonly clients = new Map<BackendId, OpenAI>()
+  /** Chosen transport per backend, narrowed once a backend proves it. */
+  private readonly transports = new Map<BackendId, ProviderTransport>()
   private lastError: string | null = null
   private readonly options: OpenAiProviderOptions
   private readonly now: () => number
 
-  constructor(apiKey: string, options: OpenAiProviderOptions = {}) {
+  constructor(apiKey: string | Partial<Record<BackendId, string>>, options: OpenAiProviderOptions = {}) {
     this.options = options
     this.now = options.now ?? (() => Date.now())
-    const key = apiKey.trim()
-    this.configured = key.length > 0
-    this.client = this.configured
-      ? new OpenAI({
-          apiKey: key,
-          maxRetries: options.maxRetries ?? 0,
-          timeout: options.timeoutMs ?? DEFAULT_PROVIDER_TIMEOUT_MS
-        })
-      : null
+    // A bare string is the OpenAI key: the shape this adapter had before a
+    // second backend existed. Callers and tests that pass one keep working.
+    this.keys =
+      typeof apiKey === 'string'
+        ? { openai: apiKey.trim() }
+        : Object.fromEntries(
+            Object.entries(apiKey).map(([id, value]) => [id, (value ?? '').trim()])
+          )
+    this.configured = PROVIDER_BACKENDS.some((backend) => (this.keys[backend.id] ?? '').length > 0)
+    for (const backend of PROVIDER_BACKENDS) {
+      this.transports.set(backend.id, backend.transports[0] ?? 'chat')
+    }
+  }
+
+  /** Whether this specific backend has a key. */
+  hasBackend(id: BackendId): boolean {
+    return (this.keys[id] ?? '').length > 0
+  }
+
+  /** Backends that can actually serve a turn right now. */
+  configuredBackends(): ProviderBackend[] {
+    return PROVIDER_BACKENDS.filter((backend) => this.hasBackend(backend.id))
   }
 
   transport(): ProviderTransport {
-    return this.activeTransport
+    const primary = this.configuredBackends()[0] ?? backendById('openai')
+    return this.transports.get(primary.id) ?? 'chat'
   }
 
   setTransport(transport: ProviderTransport): void {
-    this.activeTransport = transport
+    const primary = this.configuredBackends()[0] ?? backendById('openai')
+    this.transports.set(primary.id, transport)
   }
 
   status(): ProviderStatus {
-    if (!this.configured) {
+    const ready = this.configuredBackends()
+    if (ready.length === 0) {
       return {
         configured: false,
-        transport: this.activeTransport,
-        detail: 'No OpenAI API key',
+        transport: this.transport(),
+        detail: 'No model API key',
         lastError: this.lastError
       }
     }
+    const parts = ready.map((backend) => {
+      const transport = this.transports.get(backend.id) ?? 'chat'
+      return `${backend.label} (${transport === 'responses' ? 'Responses API' : 'chat completions'})`
+    })
     return {
       configured: true,
-      transport: this.activeTransport,
-      detail:
-        this.activeTransport === 'responses'
-          ? 'Responses API'
-          : 'Chat completions (Responses API was unavailable for this account)',
+      transport: this.transport(),
+      detail: parts.join(' · '),
       lastError: this.lastError
     }
   }
 
-  private requireClient(): OpenAI {
-    if (!this.client) {
-      throw new HuddleError('openai_missing', MISSING_KEY_MESSAGE, MISSING_KEY_FIX)
+  /** The client for a backend, built once. Throws when that key is missing. */
+  private clientFor(backend: ProviderBackend): OpenAI {
+    const existing = this.clients.get(backend.id)
+    if (existing) return existing
+    const key = this.keys[backend.id] ?? ''
+    if (!key) {
+      throw new HuddleError(
+        'openai_missing',
+        `${backend.label} is not configured, so teammates cannot reason with ${backend.label} models yet.`,
+        backend.missingFix
+      )
     }
-    return this.client
+    const client = new OpenAI({
+      apiKey: key,
+      ...(backend.baseURL ? { baseURL: backend.baseURL } : {}),
+      maxRetries: this.options.maxRetries ?? 0,
+      timeout: this.options.timeoutMs ?? DEFAULT_PROVIDER_TIMEOUT_MS
+    })
+    this.clients.set(backend.id, client)
+    return client
+  }
+
+  /**
+   * The backend that should serve this model.
+   *
+   * When the model's own backend has no key but another one does, the request
+   * is *not* silently sent somewhere else — a model id is a promise about which
+   * model answered, and quietly swapping it would make every later report about
+   * "which model did this" a lie. The caller gets a clear error instead.
+   */
+  private backendFor(model: string): ProviderBackend {
+    const backend = backendForModel(model)
+    if (this.hasBackend(backend.id)) return backend
+    const alternatives = this.configuredBackends()
+    throw new HuddleError(
+      'openai_missing',
+      alternatives.length > 0
+        ? `"${model}" is a ${backend.label} model and ${backend.label} has no API key. Configured right now: ${alternatives
+            .map((item) => item.label)
+            .join(', ')}.`
+        : MISSING_KEY_MESSAGE,
+      alternatives.length > 0
+        ? `${backend.missingFix} Or pick a ${alternatives[0]?.label} model in Settings.`
+        : MISSING_KEY_FIX
+    )
   }
 
   async complete(request: ProviderRequest): Promise<ProviderTurn> {
-    const client = this.requireClient()
-    const first = await this.attempt(client, request, this.activeTransport)
+    const backend = this.backendFor(request.model)
+    const client = this.clientFor(backend)
+    const active = this.transports.get(backend.id) ?? backend.transports[0] ?? 'chat'
+
+    const first = await this.attempt(client, request, active)
     if (first.kind === 'ok') return first.turn
 
-    // A transport that cannot serve this request at all: switch once, honestly.
-    if (this.configured && looksLikeTransportMismatch(first.error)) {
-      const next: ProviderTransport = this.activeTransport === 'responses' ? 'chat' : 'responses'
-      this.activeTransport = next
+    // A transport this backend cannot serve: switch once, to a transport the
+    // backend actually has, and say so.
+    const fallback = backend.transports.find((candidate) => candidate !== active)
+    if (fallback && looksLikeTransportMismatch(first.error)) {
+      this.transports.set(backend.id, fallback)
       this.lastError = textOf(first.error)
       this.options.onNotice?.(
         'warn',
-        `The OpenAI Responses API could not serve this call, so Huddle switched to chat completions for now (${redact(
-          textOf(first.error)
-        ).slice(0, 160)}).`
+        `${backend.label}'s ${active === 'responses' ? 'Responses API' : 'chat endpoint'} could not serve this call, so Huddle switched to ${
+          fallback === 'responses' ? 'the Responses API' : 'chat completions'
+        } for now (${redact(textOf(first.error)).slice(0, 160)}).`
       )
-      const second = await this.attempt(client, request, next)
+      const second = await this.attempt(client, request, fallback)
       if (second.kind === 'ok') return second.turn
-      throw toProviderError(second.error, `${request.model} (${next})`)
+      throw toProviderError(second.error, `${request.model} (${fallback})`, backend.label)
     }
 
-    throw toProviderError(first.error, `${request.model} (${this.activeTransport})`)
+    throw toProviderError(first.error, `${request.model} (${active})`, backend.label)
   }
 
   private async attempt(
@@ -615,10 +826,13 @@ export class OpenAiProviderAdapter implements OpenAiProvider {
     started: number
   ): Promise<ProviderTurn> {
     const tools = toChatTools(request.tools)
+    const backend = backendForModel(request.model)
     const body = {
       model: request.model,
       messages: toChatMessages(request.instructions, request.input),
-      max_completion_tokens: request.maxOutputTokens,
+      // The caller asks for tokens of *answer*. A backend that thinks in-band
+      // needs its thinking paid for on top, or it truncates before it speaks.
+      max_completion_tokens: backend.outputBudget(request.maxOutputTokens),
       ...(tools.length > 0 ? { tools } : {})
     }
     const onDelta = request.onTextDelta
@@ -632,7 +846,10 @@ export class OpenAiProviderAdapter implements OpenAiProvider {
         if (call.type !== 'function') continue
         toolCalls.push({ id: call.id, name: call.function.name, arguments: call.function.arguments })
       }
-      this.assertSomethingReturned(text, toolCalls.length, choice?.finish_reason ?? null)
+      // An empty `content` next to a non-empty chain of thought means the
+      // budget ran out mid-thought, which is a different fault from silence.
+      const reasoned = reasoningTextOf(choice?.message).length > 0
+      this.assertSomethingReturned(text, toolCalls.length, choice?.finish_reason ?? null, reasoned)
       return {
         text,
         toolCalls,
@@ -650,6 +867,7 @@ export class OpenAiProviderAdapter implements OpenAiProvider {
     const stream = await client.chat.completions.create({ ...body, stream: true }, { signal })
     let text = ''
     let finishReason = 'stop'
+    let reasoningSeen = false
     const partial = new Map<number, ProviderToolCall>()
 
     for await (const chunk of stream) {
@@ -660,6 +878,9 @@ export class OpenAiProviderAdapter implements OpenAiProvider {
         text += delta.content
         onDelta(delta.content)
       }
+      // Never streamed into the room: the human hears what a teammate says, not
+      // what it thinks. Tracked only to explain an empty answer honestly.
+      if (reasoningTextOf(delta).length > 0) reasoningSeen = true
       for (const call of delta.tool_calls ?? []) {
         const existing = partial.get(call.index) ?? { id: '', name: '', arguments: '' }
         if (call.id) existing.id = call.id
@@ -675,7 +896,7 @@ export class OpenAiProviderAdapter implements OpenAiProvider {
       .map(([, call]) => call)
       .filter((call) => call.name.length > 0)
 
-    this.assertSomethingReturned(text, toolCalls.length, finishReason)
+    this.assertSomethingReturned(text, toolCalls.length, finishReason, reasoningSeen)
     return {
       text,
       toolCalls,
@@ -687,19 +908,63 @@ export class OpenAiProviderAdapter implements OpenAiProvider {
     }
   }
 
-  private assertSomethingReturned(text: string, toolCallCount: number, finishReason: string | null): void {
+  /**
+   * A turn that produced nothing is an error, never an empty success.
+   *
+   * `reasoningOnly` distinguishes the two ways that happens, because they need
+   * different fixes: a model that answered nothing at all is a different
+   * problem from one that spent its whole budget thinking and was cut off
+   * before it spoke. Saying "no text and no tool call" for the second case sent
+   * a real debugging session looking in the wrong place.
+   */
+  private assertSomethingReturned(
+    text: string,
+    toolCallCount: number,
+    finishReason: string | null,
+    reasoningOnly = false
+  ): void {
     if (text.trim().length > 0 || toolCallCount > 0) return
+    if (reasoningOnly) {
+      throw new HuddleError(
+        'openai_empty',
+        `The model spent its entire output budget on internal reasoning and was cut off before it said anything${
+          finishReason ? ` (finish reason: ${finishReason})` : ''
+        }. Nothing was recorded for this turn.`,
+        'Raise the output token limit for this model, or pick a model that reasons less, in Settings.'
+      )
+    }
     throw new HuddleError(
       'openai_empty',
-      `OpenAI returned no text and no tool call${finishReason ? ` (finish reason: ${finishReason})` : ''}. Nothing was recorded for this turn.`,
+      `The model returned no text and no tool call${finishReason ? ` (finish reason: ${finishReason})` : ''}. Nothing was recorded for this turn.`,
       'Retry the turn; if it repeats, raise the output token limit or pick another model in Settings.'
     )
   }
 
+  /**
+   * Every model id this machine can actually reach, across every configured
+   * backend. A backend that fails to answer is skipped rather than failing the
+   * whole list, so one dead key does not hide the models that do work.
+   */
   async listModels(): Promise<string[]> {
-    const client = this.requireClient()
-    const page = await client.models.list()
-    return page.data.map((model) => model.id)
+    const backends = this.configuredBackends()
+    if (backends.length === 0) {
+      throw new HuddleError('openai_missing', MISSING_KEY_MESSAGE, MISSING_KEY_FIX)
+    }
+    const ids: string[] = []
+    const failures: string[] = []
+    for (const backend of backends) {
+      try {
+        const page = await this.clientFor(backend).models.list()
+        for (const model of page.data) ids.push(model.id)
+      } catch (error) {
+        failures.push(`${backend.label}: ${textOf(error)}`)
+      }
+    }
+    if (ids.length === 0 && failures.length > 0) {
+      this.lastError = failures.join('; ')
+      throw toProviderError(new Error(failures.join('; ')), 'listing models')
+    }
+    return [...new Set(ids)]
   }
 
   /**
@@ -707,40 +972,81 @@ export class OpenAiProviderAdapter implements OpenAiProvider {
    * Used by the standalone probe and by Settings. Bounded and cheap on purpose.
    */
   async probe(model: string): Promise<{ ok: boolean; detail: string; toolCalling: boolean }> {
-    const client = this.requireClient()
-    const tools = toResponsesTools([
-      {
-        name: 'huddle_probe',
-        description: 'Reports the probe marker. Always call this with marker "ok".',
-        parameters: {
-          type: 'object',
-          properties: { marker: { type: 'string' } },
-          required: ['marker'],
-          additionalProperties: false
-        }
+    const definition: ProviderToolDefinition = {
+      name: 'huddle_probe',
+      description: 'Reports the probe marker. Always call this with marker "ok".',
+      parameters: {
+        type: 'object',
+        properties: { marker: { type: 'string' } },
+        required: ['marker'],
+        additionalProperties: false
       }
-    ])
+    }
+
+    let backend: ProviderBackend
+    let client: OpenAI
+    try {
+      backend = this.backendFor(model)
+      client = this.clientFor(backend)
+    } catch (error) {
+      const mapped = toProviderError(error, `probing ${model}`, backendForModel(model).label)
+      return { ok: false, detail: mapped.message, toolCalling: false }
+    }
+
+    const transport = this.transports.get(backend.id) ?? backend.transports[0] ?? 'chat'
+    const signal = createDeadline(30_000).signal
 
     try {
-      const response = await client.responses.create(
+      if (transport === 'responses') {
+        const response = await client.responses.create(
+          {
+            model,
+            instructions:
+              'You are a connectivity probe. Call the tool huddle_probe with marker "ok" and nothing else.',
+            input: [{ role: 'user', content: 'Probe now.' }],
+            tools: toResponsesTools([definition]),
+            max_output_tokens: PROBE_MAX_OUTPUT_TOKENS,
+            store: false
+          },
+          { signal }
+        )
+        const calls = response.output.filter((item) => item.type === 'function_call')
+        return {
+          ok: true,
+          detail: `${backend.label} Responses API accepted ${model}${
+            calls.length > 0 ? ' and returned a tool call' : ' but returned no tool call'
+          }`,
+          toolCalling: calls.length > 0
+        }
+      }
+
+      const completion = await client.chat.completions.create(
         {
           model,
-          instructions: 'You are a connectivity probe. Call the tool huddle_probe with marker "ok" and nothing else.',
-          input: [{ role: 'user', content: 'Probe now.' }],
-          tools,
-          max_output_tokens: PROBE_MAX_OUTPUT_TOKENS,
-          store: false
+          messages: [
+            {
+              role: 'user',
+              content:
+                'You are a connectivity probe. Call the tool huddle_probe with marker "ok" and nothing else. Probe now.'
+            }
+          ],
+          tools: toChatTools([definition]),
+          // Reasoning models spend tokens before they emit a call, so the probe
+          // ceiling has to leave room for that or it reports a false negative.
+          max_tokens: PROBE_MAX_OUTPUT_TOKENS * 16
         },
-        { signal: createDeadline(30_000).signal }
+        { signal }
       )
-      const calls = response.output.filter((item) => item.type === 'function_call')
+      const calls = completion.choices[0]?.message.tool_calls ?? []
       return {
         ok: true,
-        detail: `${this.activeTransport} accepted ${model}${calls.length > 0 ? ' and returned a tool call' : ' but returned no tool call'}`,
+        detail: `${backend.label} chat completions accepted ${model}${
+          calls.length > 0 ? ' and returned a tool call' : ' but returned no tool call'
+        }`,
         toolCalling: calls.length > 0
       }
     } catch (error) {
-      const mapped = toProviderError(error, `probing ${model}`)
+      const mapped = toProviderError(error, `probing ${model}`, backend.label)
       this.lastError = mapped.message
       return { ok: false, detail: mapped.message, toolCalling: false }
     }
@@ -753,14 +1059,16 @@ export class OpenAiProviderAdapter implements OpenAiProvider {
  * `openai_missing` so the room can keep working without teammates reasoning.
  */
 export function createDefaultProvider(options: OpenAiProviderOptions = {}): OpenAiProvider {
-  let key = options.apiKey
-  if (key === undefined) {
+  if (options.apiKey !== undefined) return new OpenAiProviderAdapter(options.apiKey, options)
+
+  const keys: Partial<Record<BackendId, string>> = {}
+  for (const backend of PROVIDER_BACKENDS) {
     try {
-      key = getSecret('OPENAI_API_KEY')
+      keys[backend.id] = getSecret(backend.secret)
     } catch {
       // A secret store that cannot be read behaves exactly like a missing key.
-      key = ''
+      keys[backend.id] = ''
     }
   }
-  return new OpenAiProviderAdapter(key, options)
+  return new OpenAiProviderAdapter(keys, options)
 }

@@ -76,12 +76,67 @@ describe('parseUnifiedDiff', () => {
     assert.equal(parsed.files[0].hunks[0].oldStart, 0)
   })
 
-  test('reports a malformed hunk instead of guessing', () => {
+  test('notes a header whose counts disagree with the body, and trusts the body', () => {
     const parsed = parseUnifiedDiff(
       ['--- a/x.txt', '+++ b/x.txt', '@@ -1,3 +1,3 @@', ' one', ' two', ''].join('\n')
     )
-    assert.equal(parsed.files[0].hunks[0].malformed, true)
-    assert.ok(parsed.errors.some((error) => error.includes('declares 3 old')))
+    const hunk = parsed.files[0].hunks[0]
+    assert.equal(hunk.malformed, true)
+    // Counts come from the lines actually supplied, not from the header's claim.
+    const supplied = hunk.body.filter((line) => line.kind !== 'add').length
+    assert.equal(hunk.oldCount, supplied)
+    assert.notEqual(hunk.oldCount, 3)
+    // A miscounted header is not by itself a reason to refuse the patch: the
+    // applier still verifies every context line against the real file.
+    assert.deepEqual(parsed.errors, [])
+  })
+
+  test('a hunk longer than its header claims keeps its trailing lines', () => {
+    // The exact failure a real teammate hit: the model declared four old lines
+    // and supplied five, and the fifth was reported as "follows a hunk".
+    const parsed = parseUnifiedDiff(
+      [
+        '--- a/x.txt',
+        '+++ b/x.txt',
+        '@@ -1,2 +1,2 @@',
+        ' one',
+        '-two',
+        '+TWO',
+        ' three',
+        ' four',
+        ''
+      ].join('\n')
+    )
+    assert.deepEqual(parsed.errors, [])
+    const hunk = parsed.files[0].hunks[0]
+    assert.equal(hunk.body.length, 5)
+    assert.equal(hunk.oldCount, 4)
+    assert.equal(hunk.newCount, 4)
+  })
+
+  test('a second file section ends the hunk rather than being eaten by it', () => {
+    // `--- ` and `+++ ` would otherwise read as a removed and an added line.
+    const parsed = parseUnifiedDiff(
+      [
+        '--- a/x.txt',
+        '+++ b/x.txt',
+        '@@ -1,1 +1,1 @@',
+        '-a',
+        '+b',
+        '--- a/y.txt',
+        '+++ b/y.txt',
+        '@@ -1,1 +1,1 @@',
+        '-c',
+        '+d',
+        ''
+      ].join('\n')
+    )
+    assert.deepEqual(parsed.errors, [])
+    assert.equal(parsed.files.length, 2)
+    assert.equal(parsed.files[0].newPath, 'x.txt')
+    assert.equal(parsed.files[0].hunks[0].body.length, 2)
+    assert.equal(parsed.files[1].newPath, 'y.txt')
+    assert.equal(parsed.files[1].hunks[0].body.length, 2)
   })
 
   test('rejects a patch with no file headers', () => {
@@ -291,4 +346,124 @@ describe('applyUnifiedPatch against real git output', () => {
 
 after(async () => {
   // Nothing global to clean: every test removes its own fixtures.
+})
+
+/* ------------------------------------------------------------------ *
+ * The shapes models actually emit
+ *
+ * Every case below is a real patch a teammate produced during a live run and
+ * that Huddle used to refuse. A refused patch costs a turn and teaches the
+ * model nothing, so the parser accepts any shape whose *content* is
+ * unambiguous and leaves the safety to the applier, which still matches every
+ * context line against the real bytes on disk.
+ * ------------------------------------------------------------------ */
+
+describe('patch dialects', () => {
+  const FILE = 'a\nb\nc\nd\n'
+
+  test('a bare "@@" with context is located by its content', async () => {
+    const memory = memoryTargets({ 'x.txt': FILE })
+    const patch = ['--- a/x.txt', '+++ b/x.txt', '@@', ' b', '-c', '+C', ' d', ''].join('\n')
+    const result = await applyUnifiedPatch(patch, memory.targets)
+    assert.equal(result.applied, true, result.detail)
+    assert.equal(memory.files.get('x.txt'), 'a\nb\nC\nd\n')
+  })
+
+  test('a bare "@@" with no context at all is refused rather than guessed at', async () => {
+    const memory = memoryTargets({ 'x.txt': FILE })
+    const patch = ['--- a/x.txt', '+++ b/x.txt', '@@', '+inserted', ''].join('\n')
+    const result = await applyUnifiedPatch(patch, memory.targets)
+    assert.equal(result.applied, false)
+    assert.match(result.detail, /no way to tell where it belongs/)
+    assert.equal(memory.files.get('x.txt'), FILE, 'the file is untouched')
+  })
+
+  test('a header that miscounts its own lines still applies', async () => {
+    // The exact failure from a live run: five body lines under a header that
+    // declared four. The content was correct; only the arithmetic was wrong.
+    const memory = memoryTargets({ 'x.txt': FILE })
+    const patch = ['--- a/x.txt', '+++ b/x.txt', '@@ -1,2 +1,2 @@', ' a', ' b', '-c', '+C', ' d', ''].join('\n')
+    const result = await applyUnifiedPatch(patch, memory.targets)
+    assert.equal(result.applied, true, result.detail)
+    assert.equal(memory.files.get('x.txt'), 'a\nb\nC\nd\n')
+  })
+
+  test('the "*** Begin Patch" envelope is translated, not rejected', async () => {
+    const memory = memoryTargets({ 'x.txt': FILE })
+    const patch = [
+      '*** Begin Patch',
+      '*** Update File: x.txt',
+      '@@',
+      ' b',
+      '-c',
+      '+C',
+      ' d',
+      '*** End Patch',
+      ''
+    ].join('\n')
+    const result = await applyUnifiedPatch(patch, memory.targets)
+    assert.equal(result.applied, true, result.detail)
+    assert.equal(memory.files.get('x.txt'), 'a\nb\nC\nd\n')
+  })
+
+  test('the envelope can add and delete files', async () => {
+    const memory = memoryTargets({ 'gone.txt': 'x\n' })
+    const patch = [
+      '*** Begin Patch',
+      '*** Add File: made.txt',
+      '+hello',
+      '*** Delete File: gone.txt',
+      '-x',
+      '*** End Patch',
+      ''
+    ].join('\n')
+    const result = await applyUnifiedPatch(patch, memory.targets)
+    assert.equal(result.applied, true, result.detail)
+    assert.equal(memory.files.get('made.txt'), 'hello\n')
+    assert.equal(memory.files.has('gone.txt'), false)
+  })
+
+  test('a patch whose content disagrees with the file is still refused whole', async () => {
+    // The tolerance above is about *format*, never about content: a line the
+    // patch claims to remove has to exist, or nothing is written at all.
+    const memory = memoryTargets({ 'x.txt': FILE })
+    const patch = ['--- a/x.txt', '+++ b/x.txt', '@@', ' b', '-NOT-IN-FILE', '+C', ' d', ''].join('\n')
+    const result = await applyUnifiedPatch(patch, memory.targets)
+    assert.equal(result.applied, false)
+    assert.match(result.detail, /does not match/)
+    assert.equal(memory.files.get('x.txt'), FILE)
+    assert.equal(memory.writes.length, 0)
+  })
+})
+
+describe('half-remembered envelopes', () => {
+  test('a plain diff with a stray "*** End Patch" still applies', async () => {
+    // Seen in a live run: the model wrote a correct unified diff and then
+    // closed it with an envelope terminator it never opened.
+    const memory = memoryTargets({ 'x.txt': 'a\nb\nc\n' })
+    const patch = ['--- a/x.txt', '+++ b/x.txt', '@@ -1,3 +1,3 @@', ' a', '-b', '+B', ' c', '*** End Patch', ''].join('\n')
+    const result = await applyUnifiedPatch(patch, memory.targets)
+    assert.equal(result.applied, true, result.detail)
+    assert.equal(memory.files.get('x.txt'), 'a\nB\nc\n')
+  })
+})
+
+describe('marker casing', () => {
+  test('"*** End patch" with a lowercase p is still an envelope terminator', async () => {
+    // Exactly what a live run produced. The marker check was case-sensitive,
+    // so this one plain diff was refused while the capitalised one applied.
+    const memory = memoryTargets({ 'x.txt': 'a\nb\nc\n' })
+    const patch = ['--- a/x.txt', '+++ b/x.txt', '@@', ' a', '-b', '+B', ' c', '*** End patch', ''].join('\n')
+    const result = await applyUnifiedPatch(patch, memory.targets)
+    assert.equal(result.applied, true, result.detail)
+    assert.equal(memory.files.get('x.txt'), 'a\nB\nc\n')
+  })
+
+  test('a lowercase "*** update file:" header still names its file', async () => {
+    const memory = memoryTargets({ 'x.txt': 'a\nb\nc\n' })
+    const patch = ['*** Begin patch', '*** update file: x.txt', '@@', ' a', '-b', '+B', ' c', '*** end patch', ''].join('\n')
+    const result = await applyUnifiedPatch(patch, memory.targets)
+    assert.equal(result.applied, true, result.detail)
+    assert.equal(memory.files.get('x.txt'), 'a\nB\nc\n')
+  })
 })
