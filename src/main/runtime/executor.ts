@@ -45,6 +45,11 @@ export interface WorkItem {
   inboxMessageId?: string
   /** Mailbox assignment key: one acknowledgement per assignment. */
   ackKey?: string
+  /**
+   * The exact line the agent says when it picks this up, written for a human
+   * ear. Omitted when picking work up silently is the honest thing to do.
+   */
+  ackText?: string
   refs?: ContextRef[]
 }
 
@@ -58,6 +63,17 @@ export interface ExecutorDeps {
   onIdle(agentId: string): void
 }
 
+/** Something said to an agent *while* it was already working. */
+export interface Interjection {
+  /** What was said, verbatim. */
+  text: string
+  /** Who said it: the human, or a teammate's name. */
+  from: string
+  /** Room-wide instructions are phrased differently from a direct one. */
+  scope: 'direct' | 'broadcast'
+  at: number
+}
+
 interface RunHandle {
   roomId: string
   agentId: string
@@ -66,6 +82,14 @@ interface RunHandle {
   startedAt: number
   /** Last surface this run already proposed, so the stage is not yanked twice. */
   lastSurface: ShareSurface | null
+  /**
+   * Instructions that arrived after this run started and have not reached the
+   * model yet. Drained before every model turn and after every tool call, so
+   * the human can redirect work in flight instead of waiting for it to finish.
+   */
+  pending: Interjection[]
+  /** A one-line description of what the run was doing when it was redirected. */
+  lastActivity: string
 }
 
 export class PauseGate {
@@ -147,6 +171,32 @@ export class RuntimeExecutor {
     return true
   }
 
+  /**
+   * Hands a running agent something the human just said.
+   *
+   * This is the difference between a batch job and a teammate: the instruction
+   * lands inside the loop that is already running, before its next model turn,
+   * so the agent adjusts without losing the work it has already verified.
+   * Returns false when the agent is not running anything — the caller then
+   * queues the instruction normally.
+   */
+  interject(agentId: string, item: Omit<Interjection, 'at'>): boolean {
+    const run = this.runs.get(agentId)
+    if (!run) return false
+    run.pending.push({ ...item, at: Date.now() })
+    const agent = this.d.deps.bus.getAgent(agentId)
+    if (agent) run.lastActivity = agent.activityLabel
+    this.d.deps.bus.setAgentActivity(agentId, agent?.workState ?? 'thinking', 'Heard you — adjusting')
+    return true
+  }
+
+  /** What a running agent is doing, for an answer given while it keeps working. */
+  currentActivity(agentId: string): string | null {
+    const run = this.runs.get(agentId)
+    if (!run) return null
+    return this.d.deps.bus.getAgent(agentId)?.activityLabel ?? run.lastActivity
+  }
+
   /** Aborts whatever this agent is running. */
   cancelAgent(agentId: string): boolean {
     const run = this.runs.get(agentId)
@@ -182,7 +232,9 @@ export class RuntimeExecutor {
       taskId: item.taskId,
       controller,
       startedAt: Date.now(),
-      lastSurface: null
+      lastSurface: null,
+      pending: [],
+      lastActivity: ''
     }
     this.runs.set(item.agentId, handle)
     if (item.taskId) this.taskRuns.set(item.taskId, controller)
@@ -229,6 +281,41 @@ export class RuntimeExecutor {
     let turns = 0
     let stop: 'replied' | 'cancelled' | 'turns' | 'error' | 'stuck' = 'turns'
     let finalText = ''
+    let redirects = 0
+
+    /**
+     * Moves anything said to this agent since the last check into the model's
+     * input. Returns true when something landed, so the caller can cut a tool
+     * batch short rather than finish work the human has just redirected.
+     */
+    const drain = (droppedCalls: number): boolean => {
+      if (handle.pending.length === 0) return false
+      const taken = handle.pending.splice(0, handle.pending.length)
+      redirects += taken.length
+      for (const said of taken) {
+        const who = said.scope === 'broadcast' ? `${said.from} (to the whole room)` : said.from
+        input.push({
+          kind: 'text',
+          role: 'user',
+          content: [
+            `[LIVE INTERRUPTION — ${who} said this while you were mid-task. It outranks your current plan.]`,
+            said.text,
+            '',
+            'Act on it now. Keep everything you have already verified — do not start over and do not re-read',
+            'files you already read. If it changes what you should be doing, change course; if it is a standing',
+            'constraint, hold it for the rest of this run. Open your next message with one short line telling the',
+            'human what you changed, then carry on.',
+            droppedCalls > 0
+              ? `(${droppedCalls} tool call${droppedCalls === 1 ? '' : 's'} you had queued were not run, so you can choose differently.)`
+              : ''
+          ]
+            .filter((piece) => piece.length > 0)
+            .join('\n')
+        })
+      }
+      bus.setAgentActivity(agent.id, 'thinking', 'Taking the new instruction')
+      return true
+    }
 
     try {
       await this.acknowledge(item, agent, room)
@@ -243,6 +330,10 @@ export class RuntimeExecutor {
           stop = 'cancelled'
           break
         }
+
+        // Anything the human said since the last turn reaches the model before
+        // it decides what to do next.
+        drain(0)
 
         turns += 1
         bus.setAgentActivity(
@@ -304,9 +395,18 @@ export class RuntimeExecutor {
           break
         }
 
-        for (const call of turn.toolCalls) {
+        for (const [index, call] of turn.toolCalls.entries()) {
           if (signal.aborted) {
             stop = 'cancelled'
+            break
+          }
+          // A turn can ask for several tools at once. If the human spoke while
+          // the previous one ran, stop here: the rest of the batch was planned
+          // against instructions that no longer hold. Nothing half-written is
+          // left behind, because each call is only sent to the model together
+          // with its own result.
+          if (handle.pending.length > 0) {
+            drain(turn.toolCalls.length - index)
             break
           }
           await gate.wait(signal, () => bus.setAgentActivity(agent.id, 'paused', 'Paused'))
@@ -356,24 +456,33 @@ export class RuntimeExecutor {
       }
     } finally {
       bus.emit(room.id, { type: 'agent.stream', agentId: agent.id, taskId: item.taskId, delta: '', done: true })
-      await this.settle(item, agent, stop, finalText, evidence, turns)
+      await this.settle(item, agent, stop, finalText, evidence, turns, redirects)
       bus.setAgentActivity(agent.id, 'idle', 'Available')
     }
 
     if (this.disposed) return
   }
 
-  /** One short acknowledgement per assignment, never repeated. */
+  /**
+   * One short acknowledgement per assignment, never repeated.
+   *
+   * It says what the agent is picking up in its own words. It must never echo
+   * the runtime's internal wake-up text ("You just joined the room. Read the
+   * state and start your first slice of work") — that is plumbing, and reading
+   * it out loud made the team sound like a queue rather than colleagues.
+   */
   private async acknowledge(item: WorkItem, agent: Agent, room: Room): Promise<void> {
     if (!item.ackKey || !item.inboxMessageId) return
+    if (!item.ackText) return
     const { bridge } = this.d
     if (bridge.alreadyAcknowledged(agent.id, item.ackKey)) return
     bridge.markAcknowledged(agent.id, item.ackKey)
-    const line = `On it — ${item.reason}`
+    const line = item.ackText.trim().slice(0, 160)
+    if (!line) return
     bridge.message({
       roomId: room.id,
       agentId: agent.id,
-      body: line.slice(0, 200),
+      body: line,
       kind: 'chat',
       speak: true,
       speechReason: 'ack',
@@ -422,7 +531,9 @@ export class RuntimeExecutor {
     stop: 'replied' | 'cancelled' | 'turns' | 'error' | 'stuck',
     finalText: string,
     evidence: ContextRef[],
-    turns: number
+    turns: number,
+    /** How many times the human redirected this run while it was running. */
+    redirects: number
   ): Promise<void> {
     const { deps, bridge } = this.d
     const bus = deps.bus
@@ -473,10 +584,16 @@ export class RuntimeExecutor {
       return
     }
 
-    const body =
-      stop === 'turns'
-        ? `${finalText}\n\n[Stopped at the ${turns}-turn limit for this task, so this is where the work stands. Reply to continue.]`
-        : finalText
+    const notes: string[] = []
+    if (redirects > 0) {
+      notes.push(
+        `Redirected ${redirects} time${redirects === 1 ? '' : 's'} mid-run; this report is against the latest instruction.`
+      )
+    }
+    if (stop === 'turns') {
+      notes.push(`Stopped at the ${turns}-turn limit for this task, so this is where the work stands. Reply to continue.`)
+    }
+    const body = notes.length > 0 ? `${finalText}\n\n[${notes.join(' ')}]` : finalText
 
     const message = bridge.message({
       roomId: room.id,

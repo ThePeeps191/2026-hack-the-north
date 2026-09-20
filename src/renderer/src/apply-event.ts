@@ -153,6 +153,7 @@ export function applyRuntimeEvent(snapshot: AppSnapshot, event: RuntimeEvent): A
     case 'voice.playback':
     case 'voice.timing':
     case 'agent.stream':
+    case 'agent.steered':
     case 'notice':
       // Ephemeral: the call UI subscribes to these directly. They are kept in
       // the event ring for the activity view but never merged into state.

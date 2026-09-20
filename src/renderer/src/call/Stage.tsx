@@ -1,14 +1,17 @@
 ﻿import { useState, type JSX } from 'react'
 import type {
   Agent,
+  BrowserSessionRecord,
   ContextRef,
   CallState,
   Decision,
   IntegrationAttempt,
+  JobRecord,
   Room,
   ShareSurface,
   StageState,
   Task,
+  ToolRun,
   WorkspaceRecord
 } from '../../../shared/types'
 import type { CallScreenProps, HumanPresence, SpeakingState } from '../state/view-model'
@@ -18,6 +21,7 @@ import type { ConnectionStatus } from './derive'
 import { findAgent } from './derive'
 import { truncate } from './format'
 import { ArrowRightIcon, CloseIcon, PinIcon } from './icons'
+import { agentScreen } from './screen-feed'
 import { ShareFrame } from './ShareFrame'
 import { Spotlight } from './Spotlight'
 import { Badge, Button, Empty, IconButton } from './ui'
@@ -37,8 +41,14 @@ export interface StageProps {
   tasks: Task[]
   decisions: Decision[]
   integrations: IntegrationAttempt[]
+  /** Committed tool runs for this room: what each teammate's screen shows. */
+  toolRuns: ToolRun[]
+  jobs: JobRecord[]
+  browserSessions: BrowserSessionRecord[]
   speaking: Record<string, SpeakingState>
   queuedAgentIds: string[]
+  /** Teammates the human redirected in the last few seconds. */
+  steeredAgentIds: string[]
   human: HumanPresence
   call: CallState
   connection: ConnectionStatus
@@ -223,11 +233,22 @@ export function Stage(props: StageProps): JSX.Element {
 function GalleryAgent({ agent, stage }: { agent: Agent; stage: StageProps }): JSX.Element {
   const [removing, setRemoving] = useState(false)
   const live = stage.speaking[agent.id] ?? null
+  const workspace = workspaceFor(stage.workspaces, { kind: 'agent', agentId: agent.id })
+  const screen = agentScreen({
+    agent,
+    toolRuns: stage.toolRuns,
+    jobs: stage.jobs,
+    browserSessions: stage.browserSessions,
+    tasks: stage.tasks,
+    branch: workspace?.branch ?? null
+  })
   return (
     <AgentTile
       agent={agent}
       speaking={live}
       queued={!live && stage.queuedAgentIds.includes(agent.id)}
+      screen={screen}
+      steered={stage.steeredAgentIds.includes(agent.id)}
       now={stage.now}
       removing={removing}
       onOpenSpotlight={() => stage.onOpenSpotlight(agent.id)}

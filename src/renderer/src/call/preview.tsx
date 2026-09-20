@@ -32,6 +32,7 @@ import {
   type RuntimeEvent,
   type StageState,
   type Task,
+  type ToolRun,
   type WorkspaceRecord
 } from '../../../shared/types'
 import { AGENT_PRESETS } from '../../../shared/presets'
@@ -67,7 +68,7 @@ function mockAgent(
     title: '',
     role: source.role,
     summary: source.summary,
-    persona: source.persona,
+    persona: source.persona(source.name),
     color: source.color,
     avatar: source.avatar,
     voice: source.voice,
@@ -196,7 +197,7 @@ export function buildMockProps(scenario: PreviewScenario = 'meeting'): CallScree
     messages,
     tasks,
     decisions,
-    toolRuns: [],
+    toolRuns: scenario === 'empty' ? [] : mockToolRuns(agents),
     jobs,
     browserSessions,
     artifacts,
@@ -660,6 +661,48 @@ function mockArtifacts(): Artifact[] {
       bytes: 2048,
       createdAt: at(15)
     }
+  ]
+}
+
+/** Tool runs shaped exactly like the real ones, so the tile screens have content. */
+function mockToolRuns(agents: Agent[]): ToolRun[] {
+  const [maya, alex, sam] = agents
+  if (!maya || !alex || !sam) return []
+  let seq = 0
+  const run = (
+    agent: Agent,
+    name: string,
+    args: Record<string, string>,
+    status: ToolRun['status'],
+    summary: string
+  ): ToolRun => {
+    seq += 1
+    return {
+      id: `tr-${seq}`,
+      roomId: ROOM_ID,
+      agentId: agent.id,
+      taskId: null,
+      name,
+      argsPreview: JSON.stringify(args),
+      status,
+      summary,
+      error: status === 'error' || status === 'rejected' ? summary : null,
+      startedAt: at(20 - seq),
+      endedAt: at(19 - seq),
+      durationMs: 400 + seq * 90
+    }
+  }
+  return [
+    run(maya, 'read_file', { path: 'shared/protocol.ts' }, 'ok', 'Read 61 lines'),
+    run(alex, 'read_file', { path: 'server/game.ts' }, 'ok', 'Read 214 lines'),
+    run(sam, 'search_text', { query: 'voters' }, 'ok', '18 hits in 6 files'),
+    run(maya, 'read_file', { path: 'src/components/VoteGallery.tsx' }, 'ok', 'Read 92 lines'),
+    run(alex, 'apply_patch', { path: 'server/game.ts' }, 'ok', '+18 −6'),
+    run(sam, 'browser_act', { url: 'http://localhost:5180/vote' }, 'ok', 'Clicked "Submit vote"'),
+    run(maya, 'apply_patch', { path: 'src/components/VoteGallery.tsx' }, 'ok', '+24 −11'),
+    run(alex, 'run_command', { command: 'npm test' }, 'running', 'Job started'),
+    run(sam, 'browser_network', { url: 'http://localhost:5180/api/state' }, 'error', 'voter names present in payload'),
+    run(maya, 'inspect_diff', { path: '.' }, 'ok', '2 files changed')
   ]
 }
 

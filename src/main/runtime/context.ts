@@ -171,10 +171,18 @@ export function collectRoomState(
       branch: workspace.branch,
       verifiedRevision: workspace.lastVerifiedRevision
     })),
-    memories: bus
-      .getMemories(roomId)
-      .slice(-10)
-      .map((memory) => ({ kind: memory.kind, title: memory.title, body: memory.body }))
+    // Standing rules are never squeezed out by a run of findings: they are the
+    // one kind of memory that is wrong to forget.
+    memories: (() => {
+      const all = bus.getMemories(roomId).filter((memory) => memory.supersededById === null)
+      const constraints = all.filter((memory) => memory.kind === 'constraint').slice(-8)
+      const rest = all.filter((memory) => memory.kind !== 'constraint').slice(-10)
+      return [...constraints, ...rest].map((memory) => ({
+        kind: memory.kind,
+        title: memory.title,
+        body: memory.body
+      }))
+    })()
   }
 }
 
@@ -269,9 +277,22 @@ export function formatRoomState(snapshot: RoomStateSnapshot, style: 'conversatio
     )
   }
 
-  if (style !== 'conversation' && snapshot.memories.length > 0) {
+  // A standing rule the human set out loud ("keep test spend under five
+  // dollars") binds every turn on every path, including a quick spoken answer
+  // and a teammate who joined after it was said. It is never filtered out.
+  const constraints = snapshot.memories.filter((memory) => memory.kind === 'constraint')
+  if (constraints.length > 0) {
     parts.push(
-      `Room memory:\n${snapshot.memories.map((memory) => `- ${memory.kind}: ${clip(memory.title, 80)} — ${clip(memory.body, 200)}`).join('\n')}`
+      `Standing rules for this room — these bind you even when nobody repeats them:\n${constraints
+        .map((memory) => `- ${clip(memory.body, 240)}`)
+        .join('\n')}`
+    )
+  }
+
+  const otherMemories = snapshot.memories.filter((memory) => memory.kind !== 'constraint')
+  if (style !== 'conversation' && otherMemories.length > 0) {
+    parts.push(
+      `Room memory:\n${otherMemories.map((memory) => `- ${memory.kind}: ${clip(memory.title, 80)} — ${clip(memory.body, 200)}`).join('\n')}`
     )
   }
 

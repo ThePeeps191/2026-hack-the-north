@@ -41,10 +41,42 @@ describe('routeMessage', () => {
     assert.equal(decision.targets.length, 1)
   })
 
-  test('a greeting to the room is conversation for every teammate', () => {
+  test('a greeting to the room reaches every teammate', () => {
     const decision = routeMessage(input(human('hi agents respond with a greeting if you can hear me')))
-    assert.equal(decision.kind, 'conversation')
+    assert.equal(decision.kind, 'broadcast')
     assert.deepEqual(decision.targets.slice().sort(), ['alex', 'maya', 'sam'])
+  })
+
+  test('"everyone" means everyone, not the best-matching owner', () => {
+    const decision = routeMessage(input(human('Everyone, if you can hear me, say your name.')))
+    assert.equal(decision.kind, 'broadcast')
+    assert.deepEqual(decision.targets.slice().sort(), ['alex', 'maya', 'sam'])
+  })
+
+  test('a room-wide spend ceiling is a standing rule, not a task', () => {
+    const decision = routeMessage(input(human('Everyone, keep API costs while testing under $5.')))
+    assert.equal(decision.kind, 'broadcast')
+    assert.equal(decision.standing, true)
+    assert.equal(decision.targets.length, 3)
+  })
+
+  test('a teammate named in the message keeps it, even next to a group word', () => {
+    const decision = routeMessage(
+      input(human('Sam, check that everyone is using the same vote payload shape'))
+    )
+    assert.equal(decision.kind, 'work')
+    assert.deepEqual(decision.targets, ['sam'])
+  })
+
+  test('"all the tests pass" is not an address to the room', () => {
+    const decision = routeMessage(input(human('all the tests pass on my machine')))
+    assert.notEqual(decision.kind, 'broadcast')
+  })
+
+  test('addressing two teammates explicitly reaches both', () => {
+    const decision = routeMessage(input(human('can you two align on this', { to: ['maya', 'alex'] })))
+    assert.equal(decision.kind, 'broadcast')
+    assert.deepEqual(decision.targets.slice().sort(), ['alex', 'maya'])
   })
 
   test('an owner already working on the topic keeps it', () => {

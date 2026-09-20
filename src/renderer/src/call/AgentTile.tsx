@@ -1,12 +1,12 @@
 import type { CSSProperties, JSX } from 'react'
 import type { Agent } from '../../../shared/types'
 import type { HumanPresence, SpeakingState } from '../state/view-model'
+import type { AgentScreen } from './screen-feed'
 import { AvatarMark } from './avatars'
 import {
   agentDisplayName,
   formatRelative,
   roleLabel,
-  speechLabel,
   truncate,
   workStateLabel,
   workStateTone
@@ -26,12 +26,19 @@ import {
 import { Confirm, LevelBar, IconButton } from './ui'
 
 /**
- * One participant tile.
+ * One participant tile — a teammate's screen, not a status card.
  *
- * The tile is a strict mirror of runtime state: the activity line comes only
- * from `agent.activityLabel`, the outline only from real playback in
- * `props.speaking`, and `offline` / `idle` render as visibly quiet tiles. There
- * is no spinner, no shimmer, and no inferred "working" state anywhere.
+ * A call tile that shows a name and a status word tells you nothing, and the
+ * claim this product makes is that you can watch each teammate work. So the
+ * body of the tile is the teammate's live screen: the place the work is
+ * happening and the last real actions taken, in the order they happened.
+ *
+ * The tile is still a strict mirror of runtime state. Every line comes from a
+ * committed tool run, job or browser session; the activity line comes only from
+ * `agent.activityLabel`; the outline comes only from real playback in
+ * `props.speaking`. There is no spinner, no shimmer, and no inferred "working"
+ * state anywhere — a teammate that has done nothing shows an empty screen and
+ * says so.
  */
 
 export interface AgentTileProps {
@@ -40,6 +47,10 @@ export interface AgentTileProps {
   speaking: SpeakingState | null
   /** True while this agent has speech queued behind the current floor holder. */
   queued: boolean
+  /** What this teammate's screen shows, derived from committed records. */
+  screen: AgentScreen
+  /** True for a moment after the human redirected this teammate mid-task. */
+  steered: boolean
   now: number
   removing: boolean
   onOpenSpotlight: () => void
@@ -55,6 +66,8 @@ export function AgentTile({
   agent,
   speaking,
   queued,
+  screen,
+  steered,
   now,
   removing,
   onOpenSpotlight,
@@ -77,6 +90,7 @@ export function AgentTile({
     quiet ? 'is-quiet' : '',
     speaking ? 'is-speaking' : '',
     !speaking && queued ? 'is-queued' : '',
+    steered ? 'is-steered' : '',
     removing ? 'is-confirming' : ''
   ]
     .filter(Boolean)
@@ -85,7 +99,12 @@ export function AgentTile({
   return (
     <article
       className={classes}
-      style={speaking ? ({ '--speak-level': level } as CSSProperties) : undefined}
+      style={
+        {
+          '--tile-accent': agent.color,
+          ...(speaking ? { '--speak-level': level } : {})
+        } as CSSProperties
+      }
       title={`${agent.name} — ${workStateLabel(agent.workState)} · updated ${formatRelative(
         agent.updatedAt,
         now
@@ -97,21 +116,66 @@ export function AgentTile({
         onClick={onOpenSpotlight}
         aria-label={`Open one-on-one with ${agent.name}, ${roleLabel(agent.role)}`}
       >
-        <span className="hs-tile-avatar">
-          <AvatarMark avatar={agent.avatar} color={agent.color} size={46} dim={quiet} />
-          {speaking ? <span className="hs-speak-ring" aria-hidden="true" /> : null}
-        </span>
-        <span className="hs-tile-ident">
-          <span className="hs-tile-name">
-            {agentDisplayName(agent)}
-            {speaking ? <span className="hs-tile-speaking-tag">{speechLabel('speaking')}</span> : null}
+        <span className="hs-tile-head">
+          <span className="hs-tile-avatar">
+            <AvatarMark avatar={agent.avatar} color={agent.color} size={26} dim={quiet} />
+            {speaking ? <span className="hs-speak-ring" aria-hidden="true" /> : null}
           </span>
-          <span className="hs-tile-role">{agent.role === 'general' ? agent.activityLabel : roleLabel(agent.role)}</span>
-          <span className="hs-tile-activity">{agent.activityLabel}</span>
+          <span className="hs-tile-ident">
+            <span className="hs-tile-idline">
+              <span className="hs-tile-name">{agentDisplayName(agent)}</span>
+              <span className="hs-tile-role">{roleLabel(agent.role)}</span>
+            </span>
+            <span className="hs-tile-task" title={screen.task ?? undefined}>
+              {screen.task ? truncate(screen.task, 46) : 'no task assigned'}
+            </span>
+          </span>
+          <span className={`hs-tile-state hs-tile-state--${tone}`}>
+            {steered ? 'Heard you' : workStateLabel(agent.workState)}
+          </span>
+        </span>
+
+        <span className="hs-screen">
+          <span className="hs-screen-now">
+            <span className="hs-screen-headline">{screen.headline}</span>
+            {screen.locus ? <span className="hs-screen-locus">{screen.locus}</span> : null}
+          </span>
+
+          {screen.empty ? (
+            <span className="hs-screen-blank">
+              {quiet ? 'Nothing on this screen yet.' : 'Starting up — no actions recorded yet.'}
+            </span>
+          ) : (
+            <span className="hs-screen-feed">
+              {screen.lines.map((line) => (
+                <span key={line.id} className={`hs-screen-line hs-screen-line--${line.tone}`}>
+                  <span className="hs-screen-action">{line.action}</span>
+                  {line.target ? <span className="hs-screen-target">{line.target}</span> : null}
+                  {line.note ? <span className="hs-screen-note">{truncate(line.note, 52)}</span> : null}
+                </span>
+              ))}
+            </span>
+          )}
+
+          {speaking && speaking.text ? (
+            <span className="hs-screen-caption">
+              <SpeechIcon size={12} />
+              <span className="hs-screen-caption-text">{truncate(speaking.text, 120)}</span>
+            </span>
+          ) : null}
         </span>
       </button>
 
       <footer className="hs-tile-foot">
+        <span className="hs-tile-signals">
+          {screen.branch ? (
+            <span className="hs-tile-branch" title={`Real git worktree branch: ${screen.branch}`}>
+              {screen.branch}
+            </span>
+          ) : (
+            <span className="hs-tile-branch is-none">no worktree</span>
+          )}
+        </span>
         <span className="hs-tile-actions">
           <IconButton
             label={`Show ${agent.name}'s workspace`}

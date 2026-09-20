@@ -1,0 +1,610 @@
+/* ------------------------------------------------------------------ *
+ * Huddle — the screens layer
+ *
+ * Loaded last, on purpose. This file owns two things the earlier passes got
+ * wrong, and it states them plainly rather than patching around them:
+ *
+ *  1. THE PALETTE. The room was a warm brown-black, which reads as a chat
+ *     window. Huddle is an engineering surface, so the greys carry a blue cast,
+ *     the base is darker, the text contrast is higher, and the one amber accent
+ *     now has to earn its place: live speech, focus, the primary action.
+ *
+ *  2. THE TILE. A call tile stretched to 900px with a 46px avatar floating in
+ *     it is not a participant, it is an empty seat. A tile here is a teammate's
+ *     screen: what they are doing, where, and the last real actions they took.
+ *     Density is the point — a glance across four tiles should tell you what
+ *     the whole team is doing.
+ * ------------------------------------------------------------------ */
+
+:root:root:root {
+  /* Surfaces. Near-black with a blue cast, four steps, nothing in between. */
+  --bg: #0b0d11;
+  --bg-raised: #12151b;
+  --bg-raised-2: #191d25;
+  --bg-inset: #080a0d;
+  --bg-hover: rgba(180, 205, 255, 0.055);
+  --bg-active: rgba(180, 205, 255, 0.09);
+
+  --line: rgba(173, 196, 232, 0.1);
+  --line-strong: rgba(173, 196, 232, 0.2);
+
+  /* Text. Cool white, two steps down to dim. Higher contrast than before. */
+  --text: #eef1f6;
+  --muted: #9fa8b8;
+  --muted-dim: #6f7889;
+
+  /* The one accent. */
+  --accent: #f0a868;
+  --accent-text: #170e04;
+  --accent-soft: rgba(240, 168, 104, 0.13);
+  --accent-line: rgba(240, 168, 104, 0.45);
+
+  --danger: #f0897a;
+  --danger-soft: rgba(240, 137, 122, 0.13);
+  --ok: #6fce9f;
+  --ok-soft: rgba(111, 206, 159, 0.13);
+  --warn: #e3bd6d;
+  --warn-soft: rgba(227, 189, 109, 0.13);
+
+  --radius: 9px;
+  --radius-sm: 6px;
+  --radius-lg: 12px;
+
+  --shadow: 0 24px 60px rgba(0, 0, 0, 0.6);
+  /* A teammate's own colour, set per tile. Falls back to the accent. */
+  --tile-accent: var(--accent);
+}
+
+html,
+body {
+  background: #0b0d11;
+  color: #eef1f6;
+}
+
+/* ------------------------------------------------------------------ *
+ * Gallery
+ *
+ * The old grid used `grid-auto-rows: minmax(190px, 1fr)` with stretched
+ * content, so four tiles on one row each grew to the full height of the stage.
+ * Tiles are sized by what they hold, and the grid tops out at three columns so
+ * a screen stays readable instead of becoming a stripe.
+ * ------------------------------------------------------------------ */
+
+.hs-gallery {
+  grid-template-columns: repeat(auto-fit, minmax(285px, 1fr));
+  /* Rows grow with the stage but stop before a tile becomes a poster. */
+  grid-auto-rows: minmax(190px, 268px);
+  align-content: start;
+  gap: 12px;
+  padding: 16px 20px 20px;
+}
+
+/* ------------------------------------------------------------------ *
+ * The tile
+ * ------------------------------------------------------------------ */
+
+.hs-tile {
+  min-height: 0;
+  height: 100%;
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+  background: linear-gradient(180deg, var(--bg-raised), var(--bg));
+  box-shadow: none;
+  overflow: hidden;
+}
+
+.hs-tile::before {
+  /* A hairline of the teammate's own colour. The only place it appears. */
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 2px;
+  background: var(--tile-accent);
+  opacity: 0.55;
+  transition: opacity var(--transition);
+}
+
+.hs-tile.is-quiet {
+  background: var(--bg-raised);
+}
+
+.hs-tile.is-quiet::before {
+  opacity: 0.16;
+}
+
+.hs-tile.is-speaking {
+  border-color: var(--accent-line);
+  box-shadow: 0 0 0 1px rgba(240, 168, 104, 0.22), 0 8px 30px rgba(240, 168, 104, 0.06);
+}
+
+.hs-tile.is-speaking::before {
+  opacity: 1;
+  background: var(--accent);
+}
+
+/* The human just redirected this teammate and the run absorbed it. */
+.hs-tile.is-steered {
+  border-color: var(--accent-line);
+  animation: hs-steer 900ms cubic-bezier(0.22, 1, 0.36, 1) 2;
+}
+
+@keyframes hs-steer {
+  0% {
+    box-shadow: 0 0 0 0 rgba(240, 168, 104, 0.5);
+  }
+  70% {
+    box-shadow: 0 0 0 5px rgba(240, 168, 104, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(240, 168, 104, 0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hs-tile.is-steered {
+    animation: none;
+  }
+}
+
+/*
+ * `stage.css` centred the tile body as a column with an 18px gap and set a 20px
+ * name — the rules that turned a participant into a giant avatar floating in
+ * whitespace. They are two-class selectors, so they are overridden here at the
+ * same weight rather than left to fight the layout below.
+ */
+.hs-tile .hs-tile-main {
+  display: grid;
+  /* minmax(0,1fr) so the screen can shrink instead of pushing the footer out. */
+  grid-template-rows: auto minmax(0, 1fr);
+  flex-direction: row;
+  align-items: stretch;
+  justify-content: flex-start;
+  gap: 0;
+  padding: 0;
+  min-width: 0;
+  /* A flex item defaults to min-height:auto, which would push the footer out
+     of a tile whose row is shorter than its content. */
+  min-height: 0;
+  border-radius: 0;
+}
+
+.hs-tile .hs-tile-name {
+  font-size: 13.5px;
+}
+
+.hs-tile .hs-tile-role {
+  font-size: 10.5px;
+}
+
+.hs-tile .hs-tile-activity {
+  font-size: 11.5px;
+}
+
+.hs-tile .hs-tile-foot {
+  justify-content: space-between;
+}
+
+/*
+ * Every link in the chain from the grid track down to a monospace line has to
+ * be allowed to be narrower than its content, or one long path pushes the whole
+ * tile wider than its column and spills over the tile next to it.
+ */
+.hs-tile,
+.hs-tile-head,
+.hs-tile-ident,
+.hs-screen,
+.hs-screen-now,
+.hs-screen-feed,
+.hs-screen-line,
+.hs-tile-signals {
+  min-width: 0;
+}
+
+.hs-screen,
+.hs-screen-line {
+  overflow: hidden;
+}
+
+.hs-tile-main:not(.is-static):hover {
+  background: rgba(180, 205, 255, 0.018);
+}
+
+/* Header row: identity and the live state word. */
+
+.hs-tile-head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 10px 8px 13px;
+  min-width: 0;
+}
+
+.hs-tile-avatar {
+  position: relative;
+  flex: 0 0 auto;
+  display: inline-flex;
+}
+
+.hs-tile-ident {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.hs-tile-idline {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  min-width: 0;
+}
+
+/*
+ * What this teammate owns. It lives in the header rather than the footer,
+ * where the controls and the branch chip left it about a dozen characters
+ * wide — long enough to read "Integrate May…" and learn nothing.
+ */
+.hs-tile-head .hs-tile-task {
+  color: var(--muted);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hs-tile.is-quiet .hs-tile-head .hs-tile-task {
+  color: var(--muted-dim);
+}
+
+.hs-tile-name {
+  display: block;
+  font-size: 13.5px;
+  font-weight: 640;
+  letter-spacing: -0.005em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hs-tile-role {
+  flex: 0 0 auto;
+  color: var(--muted-dim);
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.hs-tile-state {
+  flex: 0 0 auto;
+  padding: 2px 7px;
+  border-radius: 99px;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.hs-tile-state--live {
+  color: var(--accent);
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
+}
+
+.hs-tile-state--wait {
+  color: var(--warn);
+  border-color: rgba(227, 189, 109, 0.32);
+}
+
+.hs-tile-state--stop {
+  color: var(--danger);
+  border-color: rgba(240, 137, 122, 0.34);
+}
+
+.hs-tile.is-steered .hs-tile-state {
+  color: var(--accent);
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
+}
+
+/* ------------------------------------------------------------------ *
+ * The screen
+ *
+ * Monospace, inset, and deliberately unstyled beyond what the data needs: it
+ * is a readout, not a decoration. Every line here is a committed tool run.
+ * ------------------------------------------------------------------ */
+
+.hs-screen {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  gap: 7px;
+  margin: 0 9px 9px;
+  padding: 9px 10px;
+  min-height: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--bg-inset);
+}
+
+.hs-screen-now {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.hs-screen-headline {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 560;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hs-tile.is-quiet .hs-screen-headline {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.hs-screen-locus {
+  color: var(--tile-accent);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  opacity: 0.92;
+}
+
+.hs-screen-feed {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  padding-top: 6px;
+  border-top: 1px solid var(--line);
+  /*
+   * A short tile clips the oldest lines. The fade makes that read as "there is
+   * more history here" instead of as a half-drawn row.
+   */
+  -webkit-mask-image: linear-gradient(180deg, #000 calc(100% - 16px), transparent);
+  mask-image: linear-gradient(180deg, #000 calc(100% - 16px), transparent);
+}
+
+.hs-screen-line {
+  height: 17px;
+}
+
+.hs-screen-line {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  line-height: 1.55;
+  white-space: nowrap;
+}
+
+/* Older actions recede, so the newest line reads first. */
+.hs-screen-line:nth-child(2) {
+  opacity: 0.72;
+}
+.hs-screen-line:nth-child(3) {
+  opacity: 0.5;
+}
+.hs-screen-line:nth-child(4) {
+  opacity: 0.32;
+}
+
+.hs-screen-action {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.hs-screen-line--ok .hs-screen-action {
+  color: var(--ok);
+}
+
+.hs-screen-line--bad .hs-screen-action {
+  color: var(--danger);
+}
+
+.hs-screen-line--run .hs-screen-action {
+  color: var(--accent);
+}
+
+.hs-screen-target,
+.hs-screen-note {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--muted-dim);
+}
+
+.hs-screen-target {
+  color: var(--muted);
+}
+
+/*
+ * A screen with nothing on it. It fills the space rather than leaving a gap
+ * under a hairline, because an empty screen is a real answer — this teammate
+ * has not done anything yet — and it should look like one.
+ */
+.hs-screen-blank {
+  flex: 1 1 auto;
+  display: grid;
+  place-content: center;
+  text-align: center;
+  color: var(--muted-dim);
+  font-size: 11.5px;
+  padding: 10px 6px 4px;
+  margin-top: 6px;
+  border-top: 1px solid var(--line);
+}
+
+/* The live caption sits on the screen, the way it would on a video feed. */
+.hs-screen-caption {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin-top: auto;
+  padding-top: 7px;
+  border-top: 1px solid var(--accent-line);
+  color: var(--text);
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+
+.hs-screen-caption svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+  color: var(--accent);
+}
+
+.hs-screen-caption-text {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* ------------------------------------------------------------------ *
+ * Tile footer: where the work lives, plus the controls.
+ * ------------------------------------------------------------------ */
+
+.hs-tile-foot {
+  min-height: 30px;
+  padding: 0 7px 8px 13px;
+  border-top: 0;
+  gap: 8px;
+}
+
+.hs-tile-task,
+.hs-tile-branch {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10.5px;
+}
+
+.hs-tile-task {
+  color: var(--muted);
+}
+
+.hs-tile-branch {
+  flex: 0 0 auto;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(180, 205, 255, 0.05);
+  color: var(--muted-dim);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.hs-tile-branch.is-none {
+  background: none;
+  padding-left: 0;
+  font-style: italic;
+}
+
+/*
+ * The human tile.
+ *
+ * It has no screen to show, so it stays the height of its own content instead
+ * of stretching to match the teammates beside it. You are in the room; you are
+ * not a workload.
+ */
+.hs-tile.hs-tile--human {
+  align-self: start;
+  height: auto;
+}
+
+.hs-tile.hs-tile--human .hs-tile-main {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 11px;
+  padding: 13px;
+}
+
+.hs-tile--human .hs-tile-ident {
+  display: grid;
+  gap: 2px;
+  align-items: start;
+}
+
+.hs-tile--human .hs-tile-avatar svg {
+  width: 30px;
+  height: 30px;
+}
+
+.hs-tile--human .hs-tile-activity {
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.hs-tile--human .hs-tile-foot {
+  padding: 0 7px 9px 13px;
+}
+
+/* ------------------------------------------------------------------ *
+ * Rail: the room panel
+ *
+ * The captions block held a permanent empty box at the top of the panel, above
+ * the tabs, whether or not anyone was speaking. Captions belong on the tile
+ * that is speaking; this keeps only a compact live line and gives the height
+ * back to the transcript.
+ * ------------------------------------------------------------------ */
+
+.hs-captions {
+  padding: 7px 12px;
+  gap: 4px;
+}
+
+.hs-captions:has(.hs-captions-idle) {
+  display: none;
+}
+
+.hs-captions-text {
+  max-height: 72px;
+  font-size: 12px;
+}
+
+.hs-rail-head {
+  padding: 10px 12px 9px;
+}
+
+/* ------------------------------------------------------------------ *
+ * Stage header
+ * ------------------------------------------------------------------ */
+
+.hs-stage-head {
+  min-height: 52px;
+  padding: 8px 20px;
+  border-bottom: 1px solid var(--line);
+}
+
+.hs-stage-name {
+  font-size: 15px;
+  font-weight: 640;
+  letter-spacing: -0.01em;
+}
+
+.hs-stage-goal {
+  font-size: 11.5px;
+  color: var(--muted-dim);
+}

@@ -1,5 +1,12 @@
 import { randomUUID } from 'node:crypto'
-import { AGENT_PRESETS, getAgentPreset, presetForIndex, unusedTeammateName } from '../shared/presets.ts'
+import {
+  AGENT_PRESETS,
+  getAgentPreset,
+  nameForPreset,
+  personaFor,
+  presetForIndex,
+  reconcilePersona
+} from '../shared/presets.ts'
 import {
   DEFAULT_SETTINGS,
   EPHEMERAL_EVENT_TYPES,
@@ -518,10 +525,12 @@ export class RoomService implements HuddleBus {
     const names: string[] = []
     for (let index = 0; index < count; index += 1) {
       const preset = presetForIndex(index)
-      const agent = buildAgent(room.id, preset.id, this.newId(), now)
-      agent.name = unusedTeammateName(names)
-      names.push(agent.name)
-      agents.push(agent)
+      // The name is decided before the agent exists, so the persona is generated
+      // from that exact name. A teammate can never be told it is somebody other
+      // than the name on its own tile.
+      const name = nameForPreset(preset, names)
+      names.push(name)
+      agents.push(buildAgent(room.id, preset.id, this.newId(), now, name))
     }
 
     await this.commit(() => {
@@ -656,8 +665,9 @@ export class RoomService implements HuddleBus {
       throw new HuddleError('unknown_preset', `No teammate preset named "${input.presetId}".`)
     }
 
-    const agent = buildAgent(input.roomId, preset.id, this.newId(), this.now())
-    if (input.name?.trim()) agent.name = input.name.trim().slice(0, 40)
+    const taken = existing.map((item) => item.name)
+    const name = input.name?.trim().slice(0, 40) || nameForPreset(preset, taken)
+    const agent = buildAgent(input.roomId, preset.id, this.newId(), this.now(), name)
     if (input.role) agent.role = input.role
     if (input.voiceId) agent.voice = { ...agent.voice, voiceId: input.voiceId }
     agent.model = this.state.settings.models.contributor
@@ -676,7 +686,10 @@ export class RoomService implements HuddleBus {
     if (input.name?.trim()) next.name = input.name.trim().slice(0, 40)
     if (input.title !== undefined) next.title = input.title.trim().slice(0, 48)
     if (input.role) next.role = input.role
+    // An explicit persona wins. Otherwise a rename carries the identity with it,
+    // so a renamed teammate stops introducing itself by its old name.
     if (input.persona) next.persona = input.persona
+    else next.persona = reconcilePersona(next.presetId, next.name, next.persona)
     if (input.model) next.model = input.model
     if (input.voiceId) next.voice = { ...agent.voice, voiceId: input.voiceId }
 
@@ -1074,18 +1087,21 @@ export function buildAgent(
   roomId: string,
   presetId: (typeof AGENT_PRESETS)[number]['id'],
   id: string,
-  now: string
+  now: string,
+  /** The teammate's real name. Its persona is generated from this, never before it. */
+  name?: string
 ): Agent {
   const preset = getAgentPreset(presetId) ?? AGENT_PRESETS[0]
+  const finalName = name?.trim() || preset.name
   return {
     id,
     roomId,
     presetId: preset.id,
-    name: preset.name,
+    name: finalName,
     title: '',
     role: preset.role,
     summary: preset.summary,
-    persona: preset.persona,
+    persona: personaFor(preset.id, finalName),
     color: preset.color,
     avatar: preset.avatar,
     voice: { ...preset.voice },

@@ -264,17 +264,40 @@ function agentName(deps: RuntimeDeps, roomId: string, agentId: string | null): s
 }
 
 /** Resolve "Alex", "alex", an id, or an id prefix to an agent in this room. */
+/**
+ * Finds a teammate by the name a model would actually use.
+ *
+ * Deliberately does *not* match on `presetId`. A preset id is an internal
+ * concept the model has never been told about, and matching on it caused a
+ * teammate called Sam — built from the `maya` preset by an older bug — to
+ * resolve "Maya" to itself and be told it could not message itself. Names and
+ * ids are the only things a teammate is ever shown, so they are the only
+ * things it can address.
+ */
 function resolveAgent(deps: RuntimeDeps, roomId: string, needle: string): { id: string; name: string } | null {
   const agents = deps.bus.getAgents(roomId)
-  const wanted = needle.trim().toLowerCase()
+  const wanted = needle.trim().toLowerCase().replace(/^@/, '')
   if (!wanted) return null
-  const exact = agents.find(
-    (agent) => agent.id === needle || agent.name.toLowerCase() === wanted || agent.presetId === wanted
-  )
+  const exact = agents.find((agent) => agent.id === needle || agent.name.toLowerCase() === wanted)
   if (exact) return { id: exact.id, name: exact.name }
+  // "Maya (frontend)" or "maya:" — take the first word and try again.
+  const firstWord = wanted.split(/[^a-z0-9'-]+/)[0] ?? ''
+  if (firstWord && firstWord !== wanted) {
+    const byFirstWord = agents.find((agent) => agent.name.toLowerCase() === firstWord)
+    if (byFirstWord) return { id: byFirstWord.id, name: byFirstWord.name }
+  }
   const partial = agents.find((agent) => agent.id.startsWith(needle) || agent.name.toLowerCase().startsWith(wanted))
   if (partial) return { id: partial.id, name: partial.name }
   return null
+}
+
+/** The roster, for an error that lets the model correct itself in one step. */
+function rosterNames(deps: RuntimeDeps, roomId: string, exceptAgentId: string | null): string {
+  const names = deps.bus
+    .getAgents(roomId)
+    .filter((agent) => agent.id !== exceptAgentId)
+    .map((agent) => agent.name)
+  return names.length > 0 ? names.join(', ') : 'nobody else is in this room'
 }
 
 function resolveJob(deps: RuntimeDeps, roomId: string, jobId: string): JobRecord | null {
@@ -1087,7 +1110,7 @@ const messageTeammate = defineTool<{ teammate: string; message: string; review: 
   async run(args, ctx) {
     const target = resolveAgent(ctx.deps, ctx.roomId, args.teammate)
     if (!target) {
-      const message = `No teammate called "${args.teammate}" in this room.`
+      const message = `No teammate called "${args.teammate}" in this room. The teammates here are: ${rosterNames(ctx.deps, ctx.roomId, ctx.agentId)}.`
       return { summary: 'Unknown teammate', content: message, error: message, rejected: true }
     }
     if (target.id === ctx.agentId) {
@@ -1228,7 +1251,7 @@ const assignTask = defineTool<{ taskId: string; owner: string; note: string }>({
     }
     const owner = resolveAgent(ctx.deps, ctx.roomId, args.owner)
     if (!owner) {
-      const message = `No teammate called "${args.owner}" in this room.`
+      const message = `No teammate called "${args.owner}" in this room. The teammates here are: ${rosterNames(ctx.deps, ctx.roomId, null)}.`
       return { summary: 'Unknown teammate', content: message, error: message, rejected: true }
     }
     const updated = ctx.bridge.updateTask(task.id, { ownerAgentId: owner.id })
@@ -1597,7 +1620,7 @@ const removeTeammate = defineTool<{ name: string }>({
   async run(args, ctx) {
     const target = resolveAgent(ctx.deps, ctx.roomId, args.name)
     if (!target) {
-      const message = `No teammate called "${args.name}" in this room.`
+      const message = `No teammate called "${args.name}" in this room. The teammates here are: ${rosterNames(ctx.deps, ctx.roomId, null)}.`
       return { summary: 'Unknown teammate', content: message, error: message, rejected: true }
     }
     if (target.id === ctx.agentId) {

@@ -1,4 +1,4 @@
-import { AGENT_PRESETS, getAgentPreset } from '../shared/presets.ts'
+import { AGENT_PRESETS, getAgentPreset, reconcilePersona } from '../shared/presets.ts'
 import {
   DEFAULT_SETTINGS,
   MAX_ROOM_GOAL,
@@ -296,16 +296,21 @@ export function normalizeAgent(raw: Record<string, unknown>, now: string): Agent
 
   const preset = getAgentPreset(str(raw.presetId)) ?? AGENT_PRESETS[0]
   const roleRaw = str(raw.role) as AgentRole
+  const name = str(raw.name) || preset.name
+  // State written by an earlier build stored a persona whose name had nothing to
+  // do with the name on the tile, so a teammate called Sam introduced itself as
+  // Maya. Repair that here; a hand-written persona is left exactly as it is.
+  const persona = reconcilePersona(preset.id, name, str(raw.persona))
 
   return {
     id,
     roomId,
     presetId: preset.id,
-    name: str(raw.name) || preset.name,
+    name,
     title: str(raw.title),
     role: ROLES.includes(roleRaw) ? roleRaw : preset.role,
     summary: str(raw.summary) || preset.summary,
-    persona: str(raw.persona) || preset.persona,
+    persona,
     color: str(raw.color) || preset.color,
     avatar: str(raw.avatar) || preset.avatar,
     voice: normalizeVoice(raw.voice, preset.voice),

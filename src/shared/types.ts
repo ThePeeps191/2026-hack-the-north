@@ -422,7 +422,15 @@ export interface IntegrationAttempt {
  * Room memory (local persistent memory; onboarding a new teammate)
  * ------------------------------------------------------------------ */
 
-export type MemoryKind = 'goal' | 'decision' | 'interface' | 'convention' | 'finding' | 'artifact'
+export type MemoryKind =
+  | 'goal'
+  | 'decision'
+  | 'interface'
+  | 'convention'
+  | 'finding'
+  | 'artifact'
+  /** A standing room-wide rule the human set out loud, e.g. a spend ceiling. */
+  | 'constraint'
 
 export interface MemoryEntry {
   id: string
@@ -611,6 +619,8 @@ export type RuntimeEventBody =
     }
   | { type: 'voice.timing'; sample: TimingSample }
   | { type: 'agent.stream'; agentId: string; taskId: string | null; delta: string; done: boolean }
+  /** The human spoke to this agent while it was already running. Ephemeral. */
+  | { type: 'agent.steered'; agentId: string; messageId: string; scope: 'direct' | 'broadcast' }
   | { type: 'notice'; level: 'info' | 'warn' | 'error'; text: string; fix?: string }
 
 export type RuntimeEvent = RuntimeEventEnvelope & RuntimeEventBody
@@ -624,6 +634,7 @@ export const EPHEMERAL_EVENT_TYPES: readonly RuntimeEventType[] = [
   'voice.playback',
   'voice.timing',
   'agent.stream',
+  'agent.steered',
   'job.output',
   'call.updated',
   'notice'

@@ -4,6 +4,7 @@ import { CallShell } from './CallShell'
 import '../styles/call.css'
 import '../styles/panels.css'
 import '../styles/stage.css'
+import '../styles/screen.css'
 
 /**
  * Huddle's call screen.

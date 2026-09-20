@@ -26,6 +26,7 @@ import type {
 } from '../contracts.ts'
 import type {
   Agent,
+  AgentRole,
   ContextRef,
   Decision,
   Message,
@@ -42,7 +43,14 @@ import { ConversationResponder } from './conversation.ts'
 import { RuntimeExecutor, type WorkItem } from './executor.ts'
 import { Mailbox, type MailboxItem } from './mailbox.ts'
 import { createDefaultProvider, type OpenAiProvider } from './provider.ts'
-import { routeMessage, type RouterAgent, type RouterDecision, type RouterMessage } from './router.ts'
+import {
+  hasWorkVerb,
+  pickOwner,
+  routeMessage,
+  type RouterAgent,
+  type RouterDecision,
+  type RouterMessage
+} from './router.ts'
 import { requestSpeech, speechReasonFor, invalidateSpeechBefore } from './speech.ts'
 import {
   applyTaskPatch,
@@ -65,13 +73,97 @@ import type {
 } from './types.ts'
 
 /** How many teammates may run a work loop at once in one room. */
-export const MAX_PARALLEL_RUNS_PER_ROOM = 2
+/**
+ * A room is a team, not a queue. Every teammate present can be running at the
+ * same time, which is what makes the stage worth looking at — and what makes
+ * "ask one of them something while the others keep going" a real behaviour
+ * rather than a claim. The ceiling only stops an unbounded roster.
+ */
+export const MAX_PARALLEL_RUNS_PER_ROOM = 5
 
-/** Default task title when a human instruction does not name one. */
+/**
+ * A task title from a spoken instruction.
+ *
+ * People do not speak in task titles. "Maya, actually stop and do some research
+ * first before you write any code" is an instruction to Maya, not the name of a
+ * piece of work, and a board full of raw sentences is unreadable. This strips
+ * the address, the hedges and the politeness, and keeps the verb phrase.
+ */
 function titleFromInstruction(body: string): string {
-  const firstSentence = body.split(/[.\n]/)[0]?.trim() ?? body.trim()
-  const title = firstSentence.replace(/\s+/g, ' ').slice(0, 120)
-  return title || 'Follow up on the latest instruction'
+  let text = body.split(/[.\n?!]/)[0]?.trim() ?? body.trim()
+  // "Maya, ..." / "hey Sam - ..." — drop the person being addressed.
+  text = text.replace(
+    /^\s*(hi|hey|hello|ok|okay|so|right|alright|please)?[\s,]*[A-Z][a-z]{1,15}\s*[,:—-]\s*/,
+    ''
+  )
+  // "actually", "can you", "could you just", "I want you to" — drop the run-up.
+  text = text.replace(
+    /^\s*(actually|actually,|just|quickly|now)?\s*(can|could|would|will)?\s*(you|we)?\s*(please\s+)?(just\s+)?(go\s+ahead\s+and\s+)?(i\s+(want|need)\s+you\s+to\s+)?/i,
+    ''
+  )
+  text = text.replace(/\s+/g, ' ').trim()
+  if (!text) return 'Follow up on the latest instruction'
+  const title = text.slice(0, 96).replace(/[\s,;:-]+$/, '')
+  return title.charAt(0).toUpperCase() + title.slice(1)
+}
+
+/**
+ * The line a teammate says out loud when it picks something up.
+ *
+ * It has to sound like a person on a call. The runtime's own wake-up text
+ * ("You just joined the room. Read the state and start your first slice of
+ * work.") is plumbing: reading it aloud made the team sound like a job queue,
+ * so those cases stay silent and let the real first message carry the turn.
+ */
+function ackLineFor(item: MailboxItem, taskTitle: string | null): string | null {
+  switch (item.kind) {
+    case 'onboarding':
+      // The introduction message already spoke. Anything more is noise.
+      return null
+    case 'handoff':
+    case 'review_request':
+      return taskTitle ? `Picking up ${lowerFirst(taskTitle)}.` : null
+    case 'decision_change':
+      return 'Re-checking my work against that change.'
+    case 'human_message':
+    case 'teammate_message':
+      return taskTitle ? `On it — ${lowerFirst(taskTitle)}.` : 'On it.'
+    default:
+      return null
+  }
+}
+
+function lowerFirst(text: string): string {
+  const trimmed = text.trim().replace(/[.\s]+$/, '')
+  if (!trimmed) return trimmed
+  // Leave acronyms and proper nouns alone: "API contract", not "aPI contract".
+  if (/^[A-Z]{2,}/.test(trimmed)) return trimmed
+  return trimmed[0].toLowerCase() + trimmed.slice(1)
+}
+
+/**
+ * The first slice of work a role takes when the model has not named one.
+ *
+ * Every one of these is an honest opening move for that role and is short
+ * enough to read on a tile. It is a fallback, not a script: once a teammate can
+ * reason it proposes its own first task.
+ */
+function firstSliceFor(role: AgentRole, room: Room): string {
+  const subject = room.goal.trim() || room.name
+  switch (role) {
+    case 'qa':
+      return 'Review the requirements for contradictions'
+    case 'systems':
+      return 'Define the data shape and server contract'
+    case 'frontend':
+      return 'Build the first visible slice'
+    case 'research':
+      return `Gather what is already known about ${lowerFirst(subject)}`
+    case 'design':
+      return 'Set the visual direction'
+    default:
+      return 'Read the project and take the most useful gap'
+  }
 }
 
 function defaultAcceptance(body: string): string[] {
@@ -383,14 +475,135 @@ export class HuddleAgentRuntime implements AgentRuntime, RuntimeBridge {
       return
     }
 
-    for (const targetId of targets) {
-      if (decision.kind === 'conversation') {
-        await this.answerConversation(roomId, targetId, message)
-        continue
-      }
-      this.enqueueWork(roomId, targetId, message, decision)
+    // A standing constraint is recorded once, for the whole room, before anyone
+    // reacts to it — so a teammate who starts work an hour from now is still
+    // bound by it rather than relying on a transcript that has scrolled away.
+    if (decision.standing) this.recordDirective(roomId, message)
+
+    if (decision.kind === 'broadcast') {
+      await this.broadcast(roomId, targets, message, decision)
+      this.schedule(roomId)
+      return
     }
+
+    await Promise.all(
+      targets.map(async (targetId) => {
+        // The agent is already running. The instruction goes *into* the run
+        // rather than behind it, and the agent answers out loud without its
+        // work stopping. This is the behaviour a call implies and a queue
+        // cannot give you.
+        if (this.deliverToRunningAgent(roomId, targetId, message, 'direct')) {
+          await this.answerConversation(roomId, targetId, message, { steered: true })
+          return
+        }
+        if (decision.kind === 'conversation') {
+          await this.answerConversation(roomId, targetId, message)
+          return
+        }
+        this.enqueueWork(roomId, targetId, message, decision)
+      })
+    )
     this.schedule(roomId)
+  }
+
+  /**
+   * One message, every teammate.
+   *
+   * Whoever is working hears it inside their run; whoever is free answers or
+   * picks it up. Nobody is silently skipped, and the room does not start three
+   * competing runs on the same piece of work: a broadcast that is plain work
+   * still gets exactly one owner, and everyone else is told what was decided.
+   */
+  private async broadcast(
+    roomId: string,
+    targets: string[],
+    message: Message,
+    decision: RouterDecision
+  ): Promise<void> {
+    const work = decision.kind === 'broadcast' && !decision.standing && hasWorkVerb(message.body)
+    const owner = work
+      ? pickOwner({
+          agents: this.deps.bus.getAgents(roomId).map(routerAgent),
+          tasks: this.deps.bus.getTasks(roomId).map((task) => ({
+            id: task.id,
+            title: task.title,
+            status: task.status,
+            ownerAgentId: task.ownerAgentId
+          })),
+          recent: [],
+          body: message.body,
+          busyAgentIds: this.executor.busyAgentIds()
+        }).agent
+      : null
+
+    await Promise.all(
+      targets.map(async (targetId) => {
+        const delivered = this.deliverToRunningAgent(roomId, targetId, message, 'broadcast')
+        if (owner && owner.id === targetId) {
+          if (!delivered) this.enqueueWork(roomId, targetId, message, decision)
+          else await this.answerConversation(roomId, targetId, message, { steered: true })
+          return
+        }
+        // Everyone else answers rather than starting a run, so a room-wide
+        // sentence does not fan out into three edits of the same file.
+        await this.answerConversation(roomId, targetId, message, {
+          steered: delivered,
+          broadcast: true
+        })
+      })
+    )
+  }
+
+  /**
+   * Hands a message to an agent that is mid-run. Returns false when the agent
+   * is idle, so the caller falls back to the normal path.
+   */
+  private deliverToRunningAgent(
+    roomId: string,
+    agentId: string,
+    message: Message,
+    scope: 'direct' | 'broadcast'
+  ): boolean {
+    const from = message.author.type === 'human' ? 'The human' : this.nameOf(message.author)
+    const delivered = this.executor.interject(agentId, { text: message.body, from, scope })
+    if (delivered) {
+      this.deps.bus.emit(roomId, {
+        type: 'agent.steered',
+        agentId,
+        messageId: message.id,
+        scope
+      })
+    }
+    return delivered
+  }
+
+  /** Records a room-wide standing constraint so it outlives this turn. */
+  private recordDirective(roomId: string, message: Message): void {
+    const text = message.body.trim().slice(0, 400)
+    if (!text) return
+    const title = titleFromInstruction(text)
+    this.deps.bus.addMemory({
+      id: this.deps.bus.newId(),
+      roomId,
+      kind: 'constraint',
+      title,
+      body: text,
+      decisionRevision: this.deps.bus.getRoom(roomId)?.decisionRevision ?? 0,
+      source: message.author,
+      createdAt: this.deps.bus.now(),
+      supersededById: null
+    })
+    this.deps.bus.notice(
+      roomId,
+      'info',
+      `Standing rule recorded for the room: "${title}". Every teammate carries it from here, including ones added later.`
+    )
+  }
+
+  private nameOf(author: MessageAuthor): string {
+    if (author.type === 'human') return 'The human'
+    if (author.type === 'agent') return this.deps.bus.getAgent(author.agentId)?.name ?? 'A teammate'
+    return 'The room'
   }
 
   /** Onboard a teammate added mid-project with the real state of the room. */
@@ -656,13 +869,20 @@ export class HuddleAgentRuntime implements AgentRuntime, RuntimeBridge {
     })
   }
 
-  private async answerConversation(roomId: string, agentId: string, question: Message): Promise<void> {
+  private async answerConversation(
+    roomId: string,
+    agentId: string,
+    question: Message,
+    options: { steered?: boolean; broadcast?: boolean } = {}
+  ): Promise<void> {
     const outcome = await this.conversation.respond({
       roomId,
       agentId,
       question: question.body,
       questionMessageId: question.id,
-      private: question.private !== undefined
+      private: question.private !== undefined,
+      ...(options.steered ? { steered: true, steeredFrom: this.executor.currentActivity(agentId) } : {}),
+      ...(options.broadcast ? { broadcast: true } : {})
     })
     if (!outcome.reply) {
       const failure = outcome.failure
@@ -711,7 +931,10 @@ export class HuddleAgentRuntime implements AgentRuntime, RuntimeBridge {
     if (this.disposed) return
     const room = this.deps.bus.getRoom(roomId)
     if (!room) return
-    let slots = MAX_PARALLEL_RUNS_PER_ROOM - this.executor.agentsInRoom(roomId).length
+    const roster = this.deps.bus.getAgents(roomId)
+    let slots =
+      Math.min(MAX_PARALLEL_RUNS_PER_ROOM, Math.max(1, roster.length)) -
+      this.executor.agentsInRoom(roomId).length
 
     for (const agent of this.deps.bus.getAgents(roomId)) {
       if (slots <= 0) return
@@ -744,7 +967,7 @@ export class HuddleAgentRuntime implements AgentRuntime, RuntimeBridge {
           this.updateTask(task.id, { status: 'in_progress' })
         }
       }
-      return {
+      const item: WorkItem = {
         roomId: room.id,
         agentId: agent.id,
         taskId: taskId ?? null,
@@ -753,6 +976,9 @@ export class HuddleAgentRuntime implements AgentRuntime, RuntimeBridge {
         inboxMessageId: inbox.messageId ?? undefined,
         ackKey: inbox.messageId ? `ack:${inbox.messageId}` : inbox.taskId ? `ack:${inbox.taskId}` : undefined
       }
+      const ack = ackLineFor(inbox, this.deps.bus.getTask(taskId ?? '')?.title ?? null)
+      if (ack) item.ackText = ack
+      return item
     }
 
     const tasks = this.deps.bus.getTasks(room.id)
@@ -822,12 +1048,10 @@ export class HuddleAgentRuntime implements AgentRuntime, RuntimeBridge {
     assignment: string | undefined,
     teamRevision: string | null
   ): Promise<{ body: string; spoken: string; taskTitle: string | null; acceptance: string[] }> {
-    const fallbackTitle =
-      agent.role === 'qa'
-        ? `Review the requirement "${room.goal || room.name}" for contradictions`
-        : agent.role === 'systems'
-          ? `Define the interface for "${room.goal || room.name}"`
-          : `Build the first visible slice of "${room.goal || room.name}"`
+    // Only used when the model cannot be reached or answers unparseably. Kept
+    // short because it lands on a tile, where a title wrapping the whole room
+    // goal in quotes reads as filler rather than as a piece of work.
+    const fallbackTitle = assignment || firstSliceFor(agent.role, room)
 
     if (!this.provider.configured) {
       const body = `I'm ${agent.name}, ${agent.summary}. I'll start with: ${assignment || fallbackTitle}.`
@@ -905,7 +1129,8 @@ export class HuddleAgentRuntime implements AgentRuntime, RuntimeBridge {
   private async waitForRoomSlot(roomId: string): Promise<void> {
     for (let attempt = 0; attempt < 240; attempt += 1) {
       if (!this.attachedRooms.has(roomId)) return
-      if (this.executor.agentsInRoom(roomId).length < MAX_PARALLEL_RUNS_PER_ROOM) return
+      const capacity = Math.min(MAX_PARALLEL_RUNS_PER_ROOM, Math.max(1, this.deps.bus.getAgents(roomId).length))
+      if (this.executor.agentsInRoom(roomId).length < capacity) return
       await new Promise((resolve) => setTimeout(resolve, 250))
     }
   }

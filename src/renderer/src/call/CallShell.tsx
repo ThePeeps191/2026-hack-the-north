@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type JSX } from 'react'
-import type { ContextRef, Message, ShareSurface } from '../../../shared/types'
+import type { ContextRef, Message, RuntimeEvent, ShareSurface } from '../../../shared/types'
 import { HUMAN_AVATAR, HUMAN_COLOR } from '../../../shared/presets'
 import type { CallScreenProps } from '../state/view-model'
 import type { ComposerModel } from './Composer'
@@ -74,6 +74,16 @@ export function CallShell(props: CallScreenProps): JSX.Element {
   const retainedMessages = useMemo(() => retainedTeamMessages(snapshot), [snapshot])
 
   const replyTo = replyToId ? messages.find((item) => item.id === replyToId) ?? null : null
+
+  /**
+   * Teammates the human just redirected mid-task.
+   *
+   * `agent.steered` is ephemeral — it is a fact about a moment, not a state to
+   * store — so the shell holds it for a few seconds and lets the tile show that
+   * the instruction landed while the work kept going. Without this, redirecting
+   * a running teammate looks from the outside exactly like being ignored.
+   */
+  const steeredAgentIds = useSteeredAgents(snapshot.events, room.id)
 
   const stageLabel =
     mode.kind === 'gallery'
@@ -260,7 +270,11 @@ export function CallShell(props: CallScreenProps): JSX.Element {
           tasks={tasks}
           decisions={decisions}
           integrations={integrations}
+          toolRuns={snapshot.toolRuns}
+          jobs={jobs}
+          browserSessions={snapshot.browserSessions}
           speaking={speaking}
+          steeredAgentIds={steeredAgentIds}
           queuedAgentIds={call.queuedAgentIds}
           human={human}
           call={call}
@@ -389,4 +403,41 @@ export function CallShell(props: CallScreenProps): JSX.Element {
       ) : null}
     </div>
   )
+}
+
+/** How long a tile shows that the human redirected that teammate. */
+const STEER_FLASH_MS = 6000
+
+/**
+ * Agent ids the human redirected in the last few seconds, in this room.
+ *
+ * `agent.steered` is deliberately ephemeral: it records that an instruction
+ * reached a running work loop, which is a moment rather than a state. Holding
+ * it briefly here is what makes the difference visible — otherwise talking to a
+ * teammate who is already working looks exactly like being ignored.
+ */
+function useSteeredAgents(events: readonly RuntimeEvent[], roomId: string): string[] {
+  const [, setTick] = useState(0)
+  const seen = useRef(new Map<string, number>())
+
+  const latest = events.filter(
+    (event) => event.type === 'agent.steered' && event.roomId === roomId
+  ) as Array<Extract<RuntimeEvent, { type: 'agent.steered' }>>
+  const newest = latest.length > 0 ? latest[latest.length - 1] : null
+
+  useEffect(() => {
+    if (!newest) return
+    seen.current.set(newest.agentId, Date.now())
+    setTick((value) => value + 1)
+    const timer = setTimeout(() => setTick((value) => value + 1), STEER_FLASH_MS + 50)
+    return () => clearTimeout(timer)
+  }, [newest?.id, newest?.agentId])
+
+  const cutoff = Date.now() - STEER_FLASH_MS
+  const active: string[] = []
+  for (const [agentId, at] of seen.current) {
+    if (at >= cutoff) active.push(agentId)
+    else seen.current.delete(agentId)
+  }
+  return active
 }

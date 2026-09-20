@@ -5,12 +5,21 @@
  * single* teammate owns it, and it must stay explainable and cheap. It never
  * calls the model.
  *
+ * Two things can happen to a message that is not addressed to one teammate:
+ *
+ *  - **Broadcast.** "Everyone, keep test spend under five dollars" is meant for
+ *    the whole room and every teammate must hear it. Saying it to one owner and
+ *    calling that routing was the single most dishonest thing this file did.
+ *  - **Pick an owner.** An unaddressed piece of work still needs exactly one
+ *    owner, or three teammates edit the same file.
+ *
  * Anti-spam rules encoded here:
- *  - a room-wide instruction goes to exactly one owner, never all three;
  *  - an agent's own message never routes back to that agent;
  *  - pure acknowledgements produce no turn at all;
  *  - agent messages without an explicit recipient produce nothing, so two
- *    teammates cannot ping-pong.
+ *    teammates cannot ping-pong;
+ *  - a broadcast that is plain work, with no room-wide marker, still gets one
+ *    owner rather than three racing runs.
  */
 
 import type { AgentRole, MessageAuthor, MessageKind, TaskStatus } from '../../shared/types.ts'
@@ -38,15 +47,21 @@ export interface RouterTask {
   ownerAgentId: string | null
 }
 
-export type RouteKind = 'conversation' | 'work' | 'handoff' | 'ignore'
+export type RouteKind = 'conversation' | 'work' | 'handoff' | 'broadcast' | 'ignore'
 
 export interface RouterDecision {
   kind: RouteKind
-  /** Agent ids that should react. At most one for a room-wide instruction. */
+  /** Agent ids that should react. Every teammate, for a broadcast. */
   targets: string[]
   reason: string
   /** Set when the message is clearly about a task already in the graph. */
   taskId: string | null
+  /**
+   * True when the message is a standing constraint for the room rather than a
+   * one-off — "keep API spend under five dollars", "no new dependencies". It is
+   * recorded so it survives the turn it was said in.
+   */
+  standing?: boolean
 }
 
 export interface RouterInput {
@@ -259,6 +274,101 @@ export function hasWorkVerb(body: string): boolean {
   return words(body).some((word) => WORK_VERBS.has(word))
 }
 
+/**
+ * Words that address the room rather than a person. "Everyone", "team", "all of
+ * you" — the markers a human actually uses on a call when they want every
+ * teammate to hear the same thing.
+ */
+const GROUP_WORDS = new Set([
+  'everyone',
+  'everybody',
+  'team',
+  'all',
+  'y\'all',
+  'yall',
+  'folks',
+  'guys',
+  'agents',
+  'anyone',
+  'anybody',
+  'nobody',
+  'each'
+])
+
+/**
+ * Phrasings that mean "this applies from now on", not "do this now". A standing
+ * constraint is recorded so it outlives the turn it was said in.
+ */
+const STANDING_MARKERS = [
+  /\bkeep\b.*\bunder\b/i,
+  /\bstay under\b/i,
+  /\bdon'?t\b.*\bwithout asking\b/i,
+  /\bnever\b/i,
+  /\balways\b/i,
+  /\bfrom now on\b/i,
+  /\bgoing forward\b/i,
+  /\bfor the rest of\b/i,
+  /\bmake sure\b.*\bevery\b/i,
+  /\bno more than\b/i,
+  /\bbudget\b/i,
+  /\bat most\b/i,
+  /\brule\b/i
+]
+
+/**
+ * Whether this message addresses the whole room.
+ *
+ * Deliberately conservative: a group word has to be used *as an address*
+ * ("everyone, ..." / "... , everyone") or paired with a second-person verb, so
+ * "I checked everything" and "all the tests pass" are not broadcasts.
+ */
+export function isRoomWide(body: string, agentNames: readonly string[]): boolean {
+  const trimmed = body.trim()
+  if (!trimmed) return false
+
+  // A message that names one teammate is for that teammate, even if it also
+  // says "everyone" somewhere in passing.
+  const named = agentNames.some((name) =>
+    new RegExp(`(^|[\\s,:;])${escapeWord(name)}\\b`, 'i').test(trimmed)
+  )
+  if (named) return false
+
+  // "Hey team —" / "hi agents, ..." : a greeting followed by a group word.
+  if (
+    /^\s*(hi|hey|hello|ok|okay|so|right|alright|listen|attention)[\s,]+(everyone|everybody|team|all|y'all|yall|folks|guys|agents)\b/i.test(
+      trimmed
+    )
+  ) {
+    return true
+  }
+  // "Everyone, ..." / "team:" — a group word used as the address itself. The
+  // punctuation is required, so "all the tests pass" stays a statement.
+  if (/^\s*(everyone|everybody|team|all|y'all|yall|folks|guys|agents)\s*[,:;—-]/i.test(trimmed)) {
+    return true
+  }
+  // "..., everyone." at the end.
+  if (/[,\s](everyone|everybody|team|all of you|y'all|yall|folks)\s*[.!?]?\s*$/i.test(trimmed)) return true
+
+  // "each of you", "all of you", "anyone who can hear me".
+  if (/\b(all|each|any|both)\s+of\s+you\b/i.test(trimmed)) return true
+  if (/\bif you can hear me\b/i.test(trimmed)) return true
+
+  const tokens = words(trimmed)
+  const hasGroup = tokens.some((token) => GROUP_WORDS.has(token))
+  if (!hasGroup) return false
+  // A group word plus a direct address to the listener.
+  return /\byou(r|rself|rselves)?\b/i.test(trimmed) || hasWorkVerb(trimmed)
+}
+
+/** True when the instruction should outlive the turn it was said in. */
+export function isStandingInstruction(body: string): boolean {
+  return STANDING_MARKERS.some((pattern) => pattern.test(body))
+}
+
+function escapeWord(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
 export function isRoomGreeting(body: string): boolean {
   const tokens = words(body)
   const hello = tokens.some((token) => token === 'hi' || token === 'hello' || token === 'hey' || token === 'yo')
@@ -404,6 +514,10 @@ export function routeMessage(input: RouterInput): RouterDecision {
 
   const busy = input.busyAgentIds ?? []
   const work = hasWorkVerb(body)
+  const roomWide = isRoomWide(
+    body,
+    agents.map((agent) => agent.name)
+  )
 
   if (message.private) {
     const target = message.private.agentId
@@ -418,25 +532,35 @@ export function routeMessage(input: RouterInput): RouterDecision {
     }
   }
 
+  // Said to the room: every teammate hears it. This is the whole point of a
+  // call — "everyone, keep test spend under five dollars" reaching one person
+  // is not routing, it is dropping the other two.
+  if (roomWide && agents.length > 0) {
+    return {
+      kind: 'broadcast',
+      targets: agents.map((agent) => agent.id),
+      reason: 'addressed to the whole room',
+      taskId: null,
+      standing: isStandingInstruction(body)
+    }
+  }
+
   const explicit = known(message.to)
   if (explicit.length > 0) {
-    let targets = explicit
-    if (explicit.length > 1 && work) {
-      // A room-wide instruction never fans out to every teammate.
-      const pick = pickOwner({
-        agents,
-        tasks: input.tasks,
-        recent: input.recent,
-        body,
-        busyAgentIds: busy
-      })
-      targets = pick.agent ? [pick.agent.id] : [explicit[0]]
+    if (explicit.length > 1) {
+      return {
+        kind: 'broadcast',
+        targets: explicit,
+        reason: 'addressed to several teammates',
+        taskId: null,
+        standing: isStandingInstruction(body)
+      }
     }
     return {
       kind: work ? 'work' : 'conversation',
-      targets,
+      targets: explicit,
       reason: work ? 'addressed to an owner with something to do' : 'addressed directly',
-      taskId: matchTask(input, targets)
+      taskId: matchTask(input, explicit)
     }
   }
 
@@ -466,7 +590,7 @@ export function routeMessage(input: RouterInput): RouterDecision {
 
   if (!work && isRoomGreeting(body)) {
     return {
-      kind: 'conversation',
+      kind: 'broadcast',
       targets: agents.map((agent) => agent.id),
       reason: 'greeting to the room',
       taskId: null

@@ -33,6 +33,16 @@ export interface ConversationRequest {
   questionMessageId: string | null
   /** Set when the human asked this teammate privately. */
   private?: boolean
+  /**
+   * Set when this same message was also pushed into the agent's running work
+   * loop. The answer then has to be an acknowledgement of a course change, not
+   * a status report: the human is watching the work adjust while they listen.
+   */
+  steered?: boolean
+  /** What the agent was doing when it was steered, in its own activity words. */
+  steeredFrom?: string | null
+  /** Set when the message was said to the whole room rather than to this agent. */
+  broadcast?: boolean
 }
 
 export interface ConversationReply {
@@ -87,9 +97,40 @@ export class ConversationResponder {
 
     const model = this.deps.settings().models.conversation
     const input: ProviderInputItem[] = [
-      { kind: 'text', role: 'user', content: `Current room state:\n${formatRoomState(state, 'conversation')}` },
-      { kind: 'text', role: 'user', content: `The human asks: ${request.question}` }
+      { kind: 'text', role: 'user', content: `Current room state:\n${formatRoomState(state, 'conversation')}` }
     ]
+
+    if (request.steered) {
+      input.push({
+        kind: 'text',
+        role: 'user',
+        content: [
+          request.broadcast
+            ? 'The human just said this to the whole room while you were working:'
+            : 'The human just said this to you while you were working:',
+          `"${request.question}"`,
+          '',
+          request.steeredFrom
+            ? `You were in the middle of: ${request.steeredFrom}.`
+            : 'You are in the middle of a task.',
+          'It has already been delivered into your running work — your loop will act on it at its next step.',
+          'Answer out loud in ONE short sentence: say what you are changing, or confirm you are holding it.',
+          'Do not promise to start over. Do not repeat the instruction back. Do not ask for permission.'
+        ].join('\n')
+      })
+    } else if (request.broadcast) {
+      input.push({
+        kind: 'text',
+        role: 'user',
+        content: [
+          `The human said this to the whole room: "${request.question}"`,
+          'Answer for yourself only, in one short sentence, as one voice among several.',
+          'Do not speak for your teammates and do not repeat what the instruction said.'
+        ].join('\n')
+      })
+    } else {
+      input.push({ kind: 'text', role: 'user', content: `The human asks: ${request.question}` })
+    }
 
     const previousWorkState = agent.workState
     const previousActivity = agent.activityLabel

@@ -593,3 +593,168 @@ describe('room lifecycle', () => {
     await runtime.dispose()
   })
 })
+
+/* ------------------------------------------------------------------ *
+ * Live steering and broadcast
+ *
+ * These are the two behaviours a voice room implies and a queue cannot give
+ * you: everybody hears what is said to the room, and something said to a
+ * teammate who is already working reaches that work while it is running.
+ * ------------------------------------------------------------------ */
+
+function threeAgents(deps: FakeDeps): void {
+  deps.bus.agents = [
+    makeAgent(),
+    makeAgent({ id: 'alex', presetId: 'alex', name: 'Alex', role: 'systems' }),
+    makeAgent({ id: 'sam', presetId: 'sam', name: 'Sam', role: 'qa' })
+  ]
+}
+
+describe('a message said to the room', () => {
+  test('reaches every teammate, not the best-matching one', async () => {
+    const deps = fakeDeps()
+    boundRoom(deps)
+    threeAgents(deps)
+    const provider = new ScriptedProvider([
+      turn({ text: 'Maya here. I own the vote panel.' }),
+      turn({ text: 'Alex here. I own the server contract.' }),
+      turn({ text: 'Sam here. I own verification.' })
+    ])
+    const runtime = new HuddleAgentRuntime(deps, provider)
+
+    await runtime.handleHumanMessage({
+      roomId: 'r1',
+      message: humanMessage('Everyone, if you can hear me, say your name and one thing you will own.'),
+      addressed: []
+    })
+
+    await waitFor(
+      () => new Set(agentMessages(deps).map((message) => (message.author as { agentId: string }).agentId)).size === 3,
+      'all three teammates to answer',
+      6000,
+      () => `answers from: ${agentMessages(deps).map((m) => (m.author as { agentId: string }).agentId).join(', ')}`
+    )
+
+    // Nobody started a run: a room-wide question is answered, not worked on.
+    assert.equal(deps.bus.tasks.length, 0)
+  })
+
+  test('a standing constraint is recorded for the room, not consumed by one turn', async () => {
+    const deps = fakeDeps()
+    boundRoom(deps)
+    threeAgents(deps)
+    const runtime = new HuddleAgentRuntime(
+      deps,
+      new ScriptedProvider([turn({ text: 'Understood.' }), turn({ text: 'Understood.' }), turn({ text: 'Understood.' })])
+    )
+
+    await runtime.handleHumanMessage({
+      roomId: 'r1',
+      message: humanMessage('Everyone, keep API costs while testing under $5.'),
+      addressed: []
+    })
+
+    await waitFor(() => deps.bus.getMemories('r1').length > 0, 'the constraint to be recorded')
+    const constraint = deps.bus.getMemories('r1').find((memory) => memory.kind === 'constraint')
+    assert.ok(constraint, 'a constraint memory was recorded')
+    assert.match(constraint.body, /under \$5/)
+  })
+})
+
+describe('steering a teammate that is already working', () => {
+  test('the instruction reaches the running loop instead of queueing behind it', async () => {
+    const deps = fakeDeps()
+    boundRoom(deps)
+    let released = (): void => {}
+    const gate = new Promise<void>((resolve) => {
+      released = resolve
+    })
+
+    // Turn 1 blocks until the test has sent the second instruction, so the
+    // steer provably lands *during* the run rather than after it.
+    const provider = new ScriptedProvider()
+    let turnIndex = 0
+    const seen: string[] = []
+    provider.complete = async (request) => {
+      turnIndex += 1
+      for (const item of request.input) {
+        if (item.kind === 'text' && typeof item.content === 'string') seen.push(item.content)
+      }
+      if (turnIndex === 1) {
+        await gate
+        return turn({ toolCalls: [call('c1', 'list_files', { path: '.' })] })
+      }
+      return turn({ text: 'Switched to reading the code first, as asked. No files written.' })
+    }
+
+    const runtime = new HuddleAgentRuntime(deps, provider)
+    await runtime.handleHumanMessage({
+      roomId: 'r1',
+      message: humanMessage('Maya, implement anonymous voting.'),
+      addressed: []
+    })
+    await waitFor(() => turnIndex >= 1, 'the run to reach its first model turn')
+
+    // Said while Maya is mid-run.
+    await runtime.handleHumanMessage({
+      roomId: 'r1',
+      message: humanMessage('Maya, actually research it first before you write any code.', { id: 'm-steer' }),
+      addressed: []
+    })
+    released()
+
+    await waitFor(() => deps.bus.messages.some((message) => message.kind === 'result'), 'the redirected report')
+
+    const injected = seen.find((text) => text.includes('LIVE INTERRUPTION'))
+    assert.ok(injected, 'the instruction was injected into the running loop')
+    assert.match(injected, /research it first/)
+
+    // One task, not two: the redirect changed the work rather than forking it.
+    assert.equal(deps.bus.tasks.length, 1)
+
+    // The report says it was redirected, so the human can audit the claim.
+    const result = deps.bus.messages.find((message) => message.kind === 'result')
+    assert.ok(result)
+    assert.match(result.body, /Redirected 1 time mid-run/)
+  })
+
+  test('a teammate that is not running gets the instruction the ordinary way', async () => {
+    const deps = fakeDeps()
+    boundRoom(deps)
+    const provider = new ScriptedProvider([turn({ text: 'Read the notes; nothing changed.' })])
+    const runtime = new HuddleAgentRuntime(deps, provider)
+
+    await runtime.handleHumanMessage({
+      roomId: 'r1',
+      message: humanMessage('Maya, read FEATURE_NOTES.md and tell me what it says.'),
+      addressed: []
+    })
+
+    await waitFor(() => deps.bus.messages.some((message) => message.kind === 'result'), 'the report')
+    const injected = provider.requests
+      .flatMap((request) => request.input)
+      .some((item) => item.kind === 'text' && String(item.content).includes('LIVE INTERRUPTION'))
+    assert.equal(injected, false, 'an idle teammate is not told it was interrupted')
+  })
+})
+
+describe('what a teammate says when it picks work up', () => {
+  test('the acknowledgement never reads out the runtime’s own wake-up text', async () => {
+    const deps = fakeDeps()
+    boundRoom(deps)
+    const runtime = new HuddleAgentRuntime(deps, new ScriptedProvider([turn({ text: 'Done.' })]))
+
+    await runtime.handleHumanMessage({
+      roomId: 'r1',
+      message: humanMessage('Maya, fix the vote panel layout.'),
+      addressed: []
+    })
+    await waitFor(() => deps.bus.messages.some((message) => message.kind === 'result'), 'the report')
+
+    for (const spoken of deps.voice.spoken) {
+      assert.doesNotMatch(spoken.text, /Read the state and start your first slice of work/)
+      assert.doesNotMatch(spoken.text, /You just joined/)
+      assert.doesNotMatch(spoken.text, /Why you are being woken/)
+    }
+  })
+})
