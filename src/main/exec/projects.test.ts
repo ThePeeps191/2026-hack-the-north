@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { existsSync, mkdtempSync } from 'node:fs'
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { lstat, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { after, before, describe, test } from 'node:test'
@@ -25,6 +25,8 @@ before(async () => {
   await writeFile(join(template, 'node_modules', 'left-pad', 'index.js'), 'module.exports = 1\n', 'utf8')
   await writeFile(join(template, 'dist', 'bundle.js'), 'built\n', 'utf8')
   await writeFile(join(template, '.git', 'HEAD'), 'ref: refs/heads/main\n', 'utf8')
+  // Proves the copied project can see what was already installed.
+  await writeFile(join(template, 'node_modules', 'installed-marker.txt'), 'installed\n', 'utf8')
 })
 
 after(async () => {
@@ -32,15 +34,31 @@ after(async () => {
 })
 
 describe('copyDemoTemplate', () => {
-  test('copies the project and skips install and build output', async () => {
+  test('copies the source but not the build output or history', async () => {
     const target = join(workdir, 'copy-one')
     const result = await copyDemoTemplate(template, target)
     assert.ok(result.entries >= 2)
     assert.equal(existsSync(join(target, 'package.json')), true)
     assert.equal(existsSync(join(target, 'src', 'main.ts')), true)
-    assert.equal(existsSync(join(target, 'node_modules')), false)
     assert.equal(existsSync(join(target, 'dist')), false)
     assert.equal(existsSync(join(target, '.git')), false)
+  })
+
+  test('installed dependencies are linked, not copied file by file', async () => {
+    // A demo project whose first required action is `npm install` costs a
+    // minute of the demo and shows a red dev-server failure while it runs.
+    // The 10k small files are linked rather than copied because copying them
+    // on Windows is slow enough to look like a hang.
+    const target = join(workdir, 'copy-deps')
+    await copyDemoTemplate(template, target)
+    assert.equal(
+      existsSync(join(target, 'node_modules', 'installed-marker.txt')),
+      true,
+      'the copied project cannot see the dependencies that were already installed'
+    )
+    // Linked, not duplicated: the copy walk must still skip the directory.
+    const stats = await lstat(join(target, 'node_modules'))
+    assert.equal(stats.isSymbolicLink(), true, 'node_modules was copied instead of linked')
   })
 
   test('a missing template is a clear error', async () => {
@@ -70,11 +88,15 @@ describe('bindProjectDirectory demo mode', () => {
     assert.equal(binding.hadDirtyWorkOnBind, false)
     assert.equal(binding.demoTemplate, template)
     assert.ok(existsSync(join(target, 'package.json')))
-    assert.equal(existsSync(join(target, 'node_modules')), false)
+    // Linked from the template, so the team never waits on an install.
+    assert.equal(existsSync(join(target, 'node_modules')), true)
     assert.equal(await hasCommits(target), true)
     assert.equal(await isDirty(target), false, 'the initial commit should leave a clean tree')
     assert.ok(notices.some((notice) => notice.includes('Copied the demo template')))
-    assert.ok(notices.some((notice) => notice.includes('npm install')))
+    assert.ok(
+      notices.some((notice) => notice.includes('already has its dependencies')),
+      'the bind notice should say the project is ready to run'
+    )
   })
 
   test('refuses to copy over a folder that already has files', async () => {

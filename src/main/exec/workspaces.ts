@@ -12,6 +12,7 @@ import {
   hasCommits,
   isGitRepo
 } from './git.ts'
+import { linkDependencies } from './deps.ts'
 import { canonicalizeExisting } from './path-safety.ts'
 
 /**
@@ -232,6 +233,15 @@ export class WorkspaceManager {
     }
 
     const canonicalWorktree = (await canonicalizeExisting(worktreePath)) ?? worktreePath
+
+    /*
+     * A fresh worktree has no `node_modules` — it is gitignored, so git never
+     * checks it out. Without this every teammate's first act is `npm install`,
+     * and until it finishes their scripts fail in a way that looks like the
+     * project is broken rather than merely uninstalled.
+     */
+    await linkDependencies(rootPath, canonicalWorktree)
+
     const branch = (await currentBranch(canonicalWorktree)) ?? branchName
     const record: WorkspaceRecord = {
       id: existing?.id ?? bus.newId(),

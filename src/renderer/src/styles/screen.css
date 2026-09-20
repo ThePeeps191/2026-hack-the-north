@@ -73,7 +73,13 @@ body {
 .hs-gallery {
   grid-template-columns: repeat(auto-fit, minmax(285px, 1fr));
   /* Rows grow with the stage but stop before a tile becomes a poster. */
-  grid-auto-rows: minmax(190px, 268px);
+  /*
+   * Taller than it looks like it needs to be, on purpose: the feed of real
+   * actions is the whole point of a tile, and at 268px only five lines showed
+   * while most of the stage sat empty. The cap still stops one teammate
+   * becoming a poster when the roster is small.
+   */
+  grid-auto-rows: minmax(190px, 430px);
   align-content: start;
   gap: 12px;
   padding: 16px 20px 20px;
@@ -985,4 +991,90 @@ body {
 .hs-launch-saved-when {
   font-family: var(--font-mono);
   font-size: 10.5px;
+}
+
+/* ------------------------------------------------------------------ *
+ * The human's own tile
+ *
+ * It used to be a full-size tile in the same grid as the teammates, costing a
+ * whole cell to say "You — not in call". With three teammates that made four
+ * tiles in a three-column grid: one wrapped to a second row and left a hole
+ * two screens wide, and the thing worth looking at — the teammates' screens —
+ * got the smaller half of the stage.
+ *
+ * Video calls solve this the same way: your own presence is a strip, not a
+ * participant. It spans the grid so the teammates below always form full rows.
+ * ------------------------------------------------------------------ */
+
+/*
+ * Row one is sized by its content; every later row keeps the teammate-tile
+ * height. Without this the strip still sat in a 190px-minimum row and the
+ * saving was spent on empty space.
+ */
+.hs-gallery {
+  grid-template-rows: auto;
+}
+
+.hs-gallery .hs-tile--human {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 14px;
+  height: auto;
+  min-height: 0;
+  padding: 7px 14px 7px 12px;
+  background: var(--bg-raised);
+}
+
+/* The accent hairline reads as "a teammate is live here". Not for your row. */
+.hs-gallery .hs-tile--human::before {
+  display: none;
+}
+
+.hs-gallery .hs-tile--human .hs-tile-main {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+  flex: 0 1 auto;
+  min-width: 0;
+  padding: 0;
+  background: none;
+}
+
+/* Identity, not a portrait: 46px was sized for a tile that no longer exists. */
+.hs-gallery .hs-tile--human .hs-tile-avatar svg,
+.hs-gallery .hs-tile--human .hs-tile-avatar img {
+  width: 28px;
+  height: 28px;
+}
+
+.hs-gallery .hs-tile--human .hs-tile-ident {
+  display: flex;
+  flex-direction: row;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.hs-gallery .hs-tile--human .hs-tile-name {
+  font-size: 13px;
+}
+
+/* One line is enough on a strip: the connection state is already in the footer. */
+.hs-gallery .hs-tile--human .hs-tile-activity {
+  display: none;
+}
+
+.hs-gallery .hs-tile--human .hs-tile-foot {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  min-width: 0;
+  padding: 0;
+  border-top: 0;
+  background: none;
 }

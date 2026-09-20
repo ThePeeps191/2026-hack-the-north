@@ -514,7 +514,19 @@ export class RoomService implements HuddleBus {
       goal: clampText(input.goal?.trim() ?? '', MAX_ROOM_GOAL),
       createdAt: now,
       updatedAt: now,
-      stage: { mode: { kind: 'gallery' }, follow: true, pendingHint: null },
+      /*
+       * A new room opens on the gallery and stays there.
+       *
+       * Follow mode used to be on from the first second, so the first teammate
+       * to reach a phase worth showing yanked the stage into its own workspace
+       * before anybody had looked at the room. What you actually saw after
+       * creating a room was one agent's empty file browser ("Select a file to
+       * view it") instead of three teammates working. The gallery is the
+       * overview; following a single teammate is a choice the human makes, and
+       * the header's Follow toggle makes it one click away. Proposals raised
+       * before then are still recorded as a hint, so nothing is lost.
+       */
+      stage: { mode: { kind: 'gallery' }, follow: false, pendingHint: null },
       project: null,
       joined: false,
       decisionRevision: 0

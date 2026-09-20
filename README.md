@@ -1,232 +1,161 @@
 # Huddle
 
-**A live voice meeting where AI teammates do real software work with you.**
+**A voice call with an AI engineering team that keeps working while you talk.**
 
-You join a room, say what it is for, talk out loud, and a small team of AI engineers works on a
-real project folder on your machine. The team is staffed from the goal: a build goal gets a
-frontend engineer, a systems engineer and a quality engineer; a research goal gets researchers
-instead of somebody to build screens. They read the actual files, run real commands, open the app
-in a real remote browser, disagree with you and each other when requirements conflict, record
-decisions, and hand work to whoever owns it. You can interrupt, redirect, open anyone's workspace,
-and watch the result being verified.
+Built solo at Hack the North 2026.
 
-Huddle is a desktop Electron application. It is not a chatbot, not a dashboard of metrics, and not
-scripted theatre: every activity in the interface is backed by a real tool run, a real command, a
-real file, or a real browser session.
+![The room: three teammates working in their own git worktrees](docs/images/gallery.png)
 
 ---
 
-## Architecture
+## The problem
+
+Working with an AI agent today is turn-based. You type, you wait, it thinks and calls tools, and
+only when it stops do you get to see what happened. If it went the wrong way in minute two, you
+find out in minute six — and fixing it usually means throwing away everything it did after the
+mistake.
+
+That is not how people work together. On a real team you talk *while* the work happens. You say
+"actually, hold on" and the other person stops. You look over someone's shoulder. You change your
+mind halfway and nobody starts from scratch.
+
+Huddle is that, with AI teammates.
+
+## What it does
+
+You start a room, say what it's for, and point it at a folder on your machine. A small team spins
+up — each with a name, a voice, a role, and its own git worktree — and starts working.
+
+Then you just talk.
+
+> *"Maya, actually research the payload shape before you write any more code."*
+
+Maya's tile pulses. She answers out loud in one sentence while her tools are still running, and her
+next actions are reads instead of writes. She does not restart, and she does not finish the old
+thing first.
+
+That is the whole idea: **the instruction lands inside the loop that is already running, not in a
+queue behind it.**
+
+A few other things fall out of that:
+
+- **Say it to the room and the room hears it.** "Everyone, keep test spend under $5" reaches all
+  three, and is recorded as a standing rule that binds teammates you add an hour later.
+- **Every tile is a real screen.** The file they're reading, the command they ran, the browser
+  request they inspected — click any teammate to open their workspace: code, terminal, files, and a
+  live remote browser.
+- **They disagree with you.** The demo project ships with a planted contradiction. The QA teammate
+  finds it and asks which way you want it, instead of guessing.
+
+## How it works
 
 ```
-Electron main (src/main)
-  ├── RoomService            room, message, task, decision and artifact state (HuddleBus)
-  ├── runtime/               OpenAI agent sessions, tool loop, mailboxes, task graph, speech intents
-  ├── exec/                  real workspaces, git worktrees, files, patches, jobs, integration, preview
-  ├── browser/               real Browserbase sessions driven with Playwright over CDP
-  ├── voice/ + voice-helper  local VAD + local Whisper, ElevenLabs synthesis, floor control
-  └── config/                backend-only secrets, truthful capability probing
-        │
-        │ typed IPC (context isolation, sandboxed renderer, narrow preload API)
-        ▼
-Electron renderer (src/renderer)
-  ├── call/                  call-first UI: gallery, tiles, dock, sidebar, chat, captions, spotlight
-  ├── share/                 real code, terminal, files and browser surfaces
-  └── voice/                 AudioWorklet capture, Web Audio playback, playback truth reporting
-
-Electron main ──spawn──▶ voice helper (system Node, out/main/voice-helper.js)
-                            ├── Silero VAD (onnxruntime-node)
-                            ├── faster-whisper (python/transcribe_worker.py, model stays resident)
-                            └── ElevenLabs streaming PCM
+renderer  ──typed IPC──▶  RoomService (state)  ◀──  runtime · exec · browser · voice
 ```
 
-Design rules that the code actually enforces:
+Electron, React and TypeScript on the front. A Node room controller behind it. State is an atomic
+JSON store plus an append-only event log.
 
-- **Durability before announcement.** Anything you asked for is written to disk before the event is
-  broadcast; a failed write is rolled back and reported, never silently shown as saved.
-- **Ephemeral events never touch the disk.** Audio levels, model tokens, job output and playback
-  ticks are broadcast and dropped.
-- **Work state and speech state are independent.** Interrupting speech never cancels work; muting
-  your microphone never cancels work.
-- **No invented results.** A tool that fails reports the real error; a job that is interrupted is
-  `unknown`, never "still running"; speech that was cut off is marked interrupted, not played.
-- **Microphone audio never leaves the machine.** Speech-to-text is local faster-whisper only. There
-  is no cloud STT fallback in the code.
-- **The renderer cannot reach the filesystem, Node, or raw IPC.** It gets a narrow typed API.
+The parts I think are actually interesting:
 
-## Requirements
+**The interjection channel.** My first attempt treated everything reaching an agent — instructions,
+handoffs, work — as one queue. That failed in exactly the way I was trying to fix: the agent
+finished what it was doing before reading your correction, then had to work out how much of its
+finished work was now invalid. Turn-based again, with extra steps. So the work loop now drains a
+separate interjection queue *before every model turn and after every tool call*. If a redirect lands
+mid-batch, the remaining planned tool calls are dropped rather than run against instructions that no
+longer hold.
 
-- Node.js 22+ (developed on Node 24) and npm.
-- Windows, macOS or Linux. The Windows process-tree kill path is implemented and exercised in tests.
-- Python 3.10+ **only** for the local speech helper (faster-whisper). Nothing else in Huddle is
-  Python.
+**Knowing when you stopped talking.** Cut off too early and agents answer a sentence you haven't
+finished. Cut off too late and every turn has a dead pause. Two thresholds fixed it — a low bar to
+enter speech and a higher one to stay in it. Silero VAD and faster-whisper both run locally, so
+microphone audio never leaves the machine. There is no cloud speech-to-text path in the code.
 
-## Setup
+**One git worktree per teammate.** Three agents editing one folder is a merge conflict with extra
+steps. Each gets a real branch (`huddle/maya`), and the Team view is the integration workspace where
+their work is merged and the project's own checks are run against the exact revision.
+
+**Nothing is allowed to lie.** A tool that fails reports the real error. A job killed by a restart is
+`unknown`, never "still running". Speech that got cut off is marked interrupted, not played. It
+sounds like a small thing; it's most of why the room is worth watching, because everything on screen
+is something that actually happened.
+
+## Running it
 
 ```bash
 npm install
+npm run build
+npx electron .
 ```
 
-Configuration lives in `.env` at the repo root (gitignored). All of these are optional — Huddle
-starts and stays useful without them, and tells you what is missing:
+Put your keys in `.env` at the repo root. All of them are optional — Huddle starts without any and
+tells you what's missing instead of failing:
 
-| Variable | Used for | Without it |
-| --- | --- | --- |
-| `DEEPSEEK_API_KEY` | agent reasoning and tool selection — the default backend | the room still works: you can type, the state is real, but nobody thinks or works |
-| `OPENAI_API_KEY` | the same, for `gpt-*` models | only needed if you point a model slot at OpenAI |
-| `ELEVENLABS_API_KEY` | AI speech (voices for Maya, Alex, Sam, Rio, Nova) | replies are written only; captions still work |
-| `BROWSERBASE_API_KEY`, `BROWSERBASE_PROJECT_ID` | real remote browser sessions for QA | browser verification is reported as unavailable |
-| `NGROK_AUTHTOKEN` | reserved for a stable preview tunnel | the localtunnel path is used |
+| Key | What you lose without it |
+| --- | --- |
+| `OPENAI_API_KEY` / `DEEPSEEK_API_KEY` | Agents can't reason. Everything else still works. |
+| `ELEVENLABS_API_KEY` | Replies are text-only; captions still work. |
+| `BROWSERBASE_API_KEY` + `BROWSERBASE_PROJECT_ID` | No remote browser for QA. |
 
-**Two model backends, one adapter.** OpenAI and DeepSeek both speak the OpenAI wire format, so the
-backend is chosen from the model id: `deepseek-*` goes to DeepSeek, everything else to OpenAI. A
-model whose backend has no key is refused with a clear error rather than quietly answered by the
-other one — a model id is a claim about which model did the work, and swapping it silently would
-make every later report untrue.
-
-Local speech (one-time, plus a model download):
+Local speech needs a one-time setup (Python 3.10+, used for nothing else):
 
 ```bash
-node tools/voice-lab/scripts/setup.mjs        # python venv, faster-whisper worker, Silero VAD model
-node tools/voice-lab/scripts/verify-live.ts   # optional: prove VAD + Whisper + ElevenLabs locally
+node tools/voice-lab/scripts/setup.mjs
 ```
 
-## Run
-
-```bash
-npm run dev        # electron-vite dev with hot reload
-npm run build      # build main, voice helper, preload and renderer
-npm test           # root test suite (node --test)
-npm run typecheck  # tsc for main/preload/shared and for the renderer
-```
-
-Agent models are configurable in Settings (or in the room state file). Both slots default to
-`deepseek-flash`: it answers in about a second, holds up on tool selection, and a full demo run
-costs cents. Point either slot at a `gpt-*` model and the adapter routes that slot to OpenAI
-instead. Use **Settings → Refresh capabilities** to see which models your keys can actually reach —
-a model is only shown as verified once it has answered a real request.
-
-Before a demo, run the one command that checks the things that look like app bugs but are not —
-empty provider accounts, a full disk, a missing Whisper model:
+Then before you demo anything, run this — it catches the failures that look like app bugs but
+aren't, such as an empty API account or a full disk:
 
 ```bash
 npm run demo:check
 ```
 
-`docs/TESTING.md` is a hand-testing checklist: what to do, what you should see, and what it means
-when you see something else.
+![Starting a room](docs/images/launch.png)
 
-### Verification commands
+## Trying it
+
+Hit **Use the demo project**. That copies `demo/sketch-night` — a small multiplayer
+drawing-and-voting game with real bugs, including a draw-timer bug, a duplicate-vote-after-reload
+bug, and notes that contradict the requirement you're about to give.
+
+Ask the team to make voting anonymous. Then interrupt someone halfway through and watch what
+happens.
+
+## What's honest about this
+
+It's a hackathon project, so here's what it isn't:
+
+- **Not a sandbox.** Commands agents run are real commands on your machine. Paths are confined to
+  the workspace and every IPC payload is validated, but a folder plus a shell is not isolation.
+- **Teammates can't interrupt each other yet.** Only you can. The channel is the same one — I just
+  haven't worked out how to stop three agents derailing each other in a loop.
+- **Agents don't persist across sessions.** A room remembers its decisions and standing rules; an
+  individual teammate doesn't carry anything personal between runs.
+
+`docs/BUILD_REPORT.md` records what was verified against real hardware and providers versus what was
+only unit-tested.
+
+## Layout
+
+```
+src/main/runtime/    agent loop, tools, router, task graph, roster
+src/main/exec/       worktrees, files, patching, jobs, integration, preview
+src/main/browser/    Browserbase sessions driven over CDP
+src/main/voice/      floor control + helper process (local VAD and Whisper)
+src/renderer/src/    the call UI and the workspace surfaces
+demo/sketch-night/   the project the team works on
+tools/voice-lab/     standalone speech lab used to build the voice path
+```
+
+## Checks
 
 ```bash
-npm run verify:openai    # live OpenAI transport + a real tool call
-npm run verify:browser   # live Browserbase session, with screenshots and network evidence
-npm run verify:voice     # live ElevenLabs voices/synthesis + local VAD + local Whisper
-npm run smoke            # headless agent run against the demo project (prints real tool runs)
-npm run test:voice       # the voice lab's own suite
-npm run test:demo        # the demo project's suite
-
-npm run dev              # then, from a second shell:
-npm run ui-check         # 13 checks against the running window over CDP
-npm run demo-run         # types a real instruction into the app and reports what the team did
+npm test          # 377 tests, no network
+npm run typecheck
+npm run demo:check
 ```
 
-`ui-check` and `demo-run` need the app started with a debugging port:
+## Built with
 
-```bash
-npx electron . --remote-debugging-port=9222
-```
-
-## Using Huddle
-
-1. **Create or open a room** and say what it is for. The roster is picked to fit that goal — a
-   software goal gets a frontend engineer, a systems engineer and a quality engineer; a research
-   goal gets researchers instead of somebody to build screens. They start idle and honest about it.
-   The pick is one cheap model call (a keyword reading of the goal, then a fixed order, if the
-   provider is unreachable), and the room tells you which teammates it chose and why.
-2. **Bind the room to a real project.** Either *Choose folder* (any existing project) or *Use the
-   demo project* — this copies `demo/sketch-night` into `.data/projects/` and gives the team a real
-   repository with real bugs and contradictory notes.
-3. **Join the call** from the dock. Huddle opens the microphone, runs local VAD, transcribes locally
-   and shows your words as captions while you speak. You can also just type.
-4. **Talk normally.** “Maya, take the vote gallery.” “Alex, what shape does the server expose?” “Sam,
-   check whether voter names leak in the response.” Agents answer briefly out loud and keep working.
-5. **Interrupt whenever you like.** Stop speaking cuts the audio immediately; your own speech cuts it
-   by itself. Neither cancels the work.
-6. **Click a face** to go one-on-one with that agent: its presence, its workspace, its private side
-   channel, and a way back to the room.
-7. **Change the requirement.** Say or type the change. Agents must record it as a new decision
-   revision, mark affected work stale, and tell the people whose work is affected — the room shows
-   the revision and who was notified.
-8. **Watch the Team result.** Integration runs the project's own checks against the exact revision
-   and records them, pass or fail, with real output. A failed check never replaces the last verified
-   revision.
-
-## Project, workspaces and safety
-
-- The Team workspace is the project folder itself. Each agent gets a **real git worktree** and branch
-  (`huddle/<name>`) when the project is a git repository with commits; when it is not, agents share
-  the folder and Huddle says so plainly instead of pretending otherwise.
-- Every path that arrives from a tool, a model or the UI is canonicalised and confined to the
-  workspace root. `..`, absolute escapes and symlink escapes are refused.
-- Huddle refuses to bind its own source tree as a target project.
-- A project folder plus a shell is **not** a sandbox. Huddle confines paths and validates every IPC
-  payload, but commands you ask an agent to run are real commands on your machine.
-
-## Demo
-
-`demo/sketch-night` is the demonstration project: a small multiplayer drawing-and-voting game. It is
-a constructed starting scaffold, and the repository says so in its own README. It contains real
-drawing, real voting, a real draw-timer bug, a real duplicate-vote-after-reload bug, and a real
-contradiction: its notes describe *public* voting (voter identities visible), while the demo
-requirement is that voting must become *anonymous*.
-
-A good demo run: bind the demo project, ask the team to review it, let Sam find the contradiction,
-settle it with one targeted question, watch the decision revision land, watch the real edits and the
-real checks, and have Sam verify the running app in Browserbase.
-
-Reset: delete `.data/` (Huddle's own state, demos, artifacts, logs) and start again. Nothing in your
-own project folders is touched by that.
-
-## Storage
-
-- Development: `.data/huddle-state.json` (plus `huddle-events.jsonl`, `rooms/<id>/artifacts`,
-  `rooms/<id>/worktrees`, `projects/`, `electron-profile/`).
-- Packaged: the same layout under Electron's `userData`.
-- Writes are serialised and atomic (temp file + replace, with retries on Windows lock contention).
-- A corrupt state file is copied to `.corrupt-<timestamp>` beside the original and reported; a valid
-  older schema is migrated with a `.v<n>-<timestamp>.bak` backup.
-- Operations a restart interrupted are listed as resumable items. Huddle never re-runs them by
-  itself and never claims a process survived.
-
-## Sponsor integrations
-
-- **OpenAI** — real reasoning and tool selection for every agent turn, the conversation path, task
-  decomposition, requirement changes, failure recovery and coordination. Not decorative text.
-- **ElevenLabs** — streaming PCM synthesis with a distinct voice per teammate, playback-driven
-  speaking indicators, interruption and barge-in. Never used for transcription.
-- **Browserbase** — real remote sessions for QA: navigation, interaction, screenshots, network
-  payload inspection and evidence artifacts against the running preview.
-- Local **faster-whisper** and **Silero VAD** keep speech private.
-
-## Repository layout
-
-```
-src/main/            Electron main: room state, hosts, IPC, composition root
-src/main/runtime/    agent runtime (OpenAI provider, tools, executor, conversation, tasks)
-src/main/exec/       workspaces, worktrees, files, patching, jobs, integration, preview
-src/main/browser/    Browserbase sessions and automation
-src/main/voice/      voice host, floor control, helper protocol (helper/ runs in its own process)
-src/preload/         the only bridge to the renderer
-src/renderer/src/    call UI, workspace surfaces, voice capture/playback
-src/shared/          domain types, IPC contract, voice transport, agent presets
-tools/voice-lab/     standalone local-speech lab (VAD, Whisper worker, ElevenLabs probes, tests)
-demo/sketch-night/   the demonstration project
-docs/OWNERSHIP.md    who owns which directory while building
-scripts/             live smoke runs against the real providers
-```
-
-## Known limitations
-
-`docs/BUILD_REPORT.md` records exactly what was verified against real hardware and providers, what
-was only unit-tested, and what could not be run in the build environment.
+Electron · React · TypeScript · Node · OpenAI · ElevenLabs · Browserbase · Playwright · Monaco ·
+xterm · faster-whisper · Silero VAD

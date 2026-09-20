@@ -238,3 +238,6 @@ Thumbs.db
 
 # Scratch space used by local scripts and tests.
 _scratch*
+
+# Screenshots captured while driving the app during development.
+.shots/

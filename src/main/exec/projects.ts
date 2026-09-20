@@ -7,6 +7,7 @@ import { HuddleError } from '../huddle-error.ts'
 import { appRoot, dataRoot, demoProjectsDir, demoTemplatePath } from '../paths.ts'
 import { canonicalizeExisting, isPathInside, realpathExistingAncestor } from './path-safety.ts'
 import { git, gitAvailable, hasCommits, isDirty, isGitRepo } from './git.ts'
+import { linkDependencies } from './deps.ts'
 
 /**
  * Binding a room to a real project directory.
@@ -122,6 +123,17 @@ export async function copyDemoTemplate(
       return true
     }
   })
+
+  /*
+   * The template's installed dependencies come across as a link.
+   *
+   * They are excluded from the copy above (10k small files is slow enough on
+   * Windows to look like a hang), but a demo project without them means the
+   * team's first move is always `npm install` rather than the work you asked
+   * for. Linking is instant and makes `npm test` work in the first minute.
+   */
+  await linkDependencies(templateRoot, targetPath)
+
   return { entries }
 }
 
@@ -218,9 +230,14 @@ export async function bindProjectDirectory(
     notify('info', `Copied the demo template (${copy.entries} entries) into ${target}.`)
     const repo = await initializeRepo(target)
     notify(repo.isGitRepo ? 'info' : 'warn', repo.detail)
+    // Says which of the two states the project is really in, rather than
+    // promising an install that linking has already made unnecessary.
+    const linked = existsSync(join(target, 'node_modules'))
     notify(
       'info',
-      `${target} has no installed dependencies yet, so the first npm install there will take a minute.`
+      linked
+        ? `${target} already has its dependencies, so the team can run the project's own checks straight away.`
+        : `${target} has no installed dependencies yet, so the first npm install there will take a minute.`
     )
     return {
       rootPath: (await canonicalizeExisting(target)) ?? canonical,
