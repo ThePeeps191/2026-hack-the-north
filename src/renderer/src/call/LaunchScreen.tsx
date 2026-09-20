@@ -163,10 +163,16 @@ export function LaunchScreen({ rooms, capabilities, onCreate, onOpen }: LaunchSc
             </div>
 
             <div className="hs-create-room-actions">
+              {/*
+                The goal does two things, and only one of them is obvious from
+                the field's label. Saying so here is what makes the roster feel
+                chosen rather than fixed — otherwise a room staffed with two
+                researchers for a research goal looks like a coincidence.
+              */}
               <p className="hs-launch-note">
                 {goal.trim()
-                  ? 'They read the goal, take a first slice each and introduce themselves.'
-                  : 'Without a goal they will wait to be asked for something.'}
+                  ? 'The teammates are picked for this goal. They read it, take a first slice each and introduce themselves.'
+                  : 'Without a goal nobody can be picked for the work, so they will wait to be asked.'}
               </p>
               <Button variant="primary" disabled={busy} type="submit" onClick={() => undefined}>
                 {busy ? 'Starting…' : 'Start the room'}

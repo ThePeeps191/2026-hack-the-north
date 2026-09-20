@@ -26,6 +26,7 @@ import type {
 import type { RecordDecisionInput } from '../shared/api.ts'
 import type {
   Agent,
+  AgentPresetId,
   AppSettings,
   Artifact,
   BrowserSessionRecord,
@@ -397,6 +398,16 @@ export interface InboundMessage {
 export interface AgentRuntime {
   attachRoom(roomId: string): Promise<void>
   detachRoom(roomId: string): Promise<void>
+
+  /**
+   * Which teammates a room with this goal should be staffed with.
+   *
+   * Asked before the room exists, so it takes the goal rather than a room id.
+   * Never rejects and never hangs: a provider that is slow, missing or
+   * unhelpful falls through to a keyword reading of the goal, because a room
+   * that does not open is worse than a roster that is slightly off.
+   */
+  planRoster(goal: string, count: number): Promise<AgentPresetId[]>
 
   /** A human message arrived (typed or finalized transcript). */
   handleHumanMessage(input: InboundMessage): Promise<void>

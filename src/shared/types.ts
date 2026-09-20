@@ -710,6 +710,11 @@ export interface CreateRoomInput {
   goal?: string
   /** How many teammates to create. Clamped to 1–MAX_AGENTS_PER_ROOM. */
   agentCount?: number
+  /**
+   * The roster to staff the room with, chosen from the goal by the caller.
+   * When absent the room falls back to the fixed preset order.
+   */
+  presetIds?: AgentPresetId[]
 }
 
 export interface UpdateRoomInput {

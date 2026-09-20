@@ -523,8 +523,11 @@ export class RoomService implements HuddleBus {
     const count = clampAgentCount(input.agentCount)
     const agents: Agent[] = []
     const names: string[] = []
+    // A roster chosen from the goal, when the caller worked one out. Otherwise
+    // the fixed preset order, which assumes the room is a software project.
+    const roster = input.presetIds ?? []
     for (let index = 0; index < count; index += 1) {
-      const preset = presetForIndex(index)
+      const preset = getAgentPreset(roster[index] ?? '') ?? presetForIndex(index)
       // The name is decided before the agent exists, so the persona is generated
       // from that exact name. A teammate can never be told it is somebody other
       // than the name on its own tile.

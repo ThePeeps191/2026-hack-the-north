@@ -26,6 +26,7 @@ import type {
 } from '../contracts.ts'
 import type {
   Agent,
+  AgentPresetId,
   AgentRole,
   ContextRef,
   Decision,
@@ -51,6 +52,13 @@ import {
   type RouterDecision,
   type RouterMessage
 } from './router.ts'
+import {
+  defaultRoster,
+  heuristicRoster,
+  parseRoster,
+  rosterInstructions,
+  ROSTER_TIMEOUT_MS
+} from './roster.ts'
 import { requestSpeech, speechReasonFor, invalidateSpeechBefore } from './speech.ts'
 import {
   applyTaskPatch,
@@ -432,6 +440,42 @@ export class HuddleAgentRuntime implements AgentRuntime, RuntimeBridge {
       } else {
         this.deps.bus.updateAgent(agent.id, { connected: false })
       }
+    }
+  }
+
+  /**
+   * Picks the roster for a room that does not exist yet.
+   *
+   * One cheap model call against the fast conversation model, bounded by
+   * `ROSTER_TIMEOUT_MS`, with a keyword reading of the goal underneath it. The
+   * call is worth making because a goal is a sentence, not a set of keywords —
+   * "find out whether we should migrate off Postgres" needs research, and no
+   * word list gets that right — but nothing about opening a room may depend on
+   * a provider being reachable.
+   */
+  async planRoster(goal: string, count: number): Promise<AgentPresetId[]> {
+    const wanted = Math.max(1, count)
+    const trimmed = goal.trim()
+    const fallback = trimmed ? heuristicRoster(trimmed, wanted) : defaultRoster(wanted)
+    if (!trimmed || !this.provider.configured) return fallback
+
+    try {
+      const turn = await this.provider.complete({
+        model: this.deps.settings().models.conversation,
+        instructions: rosterInstructions(wanted),
+        input: [{ kind: 'text', role: 'user', content: `Goal: ${trimmed.slice(0, 600)}` }],
+        tools: [],
+        maxOutputTokens: 60,
+        timeoutMs: ROSTER_TIMEOUT_MS
+      })
+      const picked = parseRoster(turn.text, wanted)
+      if (!picked) return fallback
+      // A short answer is still an answer; pad rather than discard it.
+      while (picked.length < wanted) picked.push('nova')
+      return picked.slice(0, wanted)
+    } catch {
+      // Unreachable, slow or unhappy: the goal still reads the same way.
+      return fallback
     }
   }
 

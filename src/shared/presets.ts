@@ -246,6 +246,9 @@ export const TEAMMATE_NAMES = [
   'Rowan'
 ] as const
 
+/** Names that belong to no preset, used for a second teammate of one kind. */
+const EXTRA_NAMES = TEAMMATE_NAMES.slice(AGENT_PRESETS.length)
+
 export function unusedTeammateName(taken: readonly string[]): string {
   const used = new Set(taken.map((name) => name.toLowerCase()))
   for (const name of TEAMMATE_NAMES) {
@@ -258,10 +261,22 @@ export function presetForIndex(index: number): AgentPreset {
   return AGENT_PRESETS[index % AGENT_PRESETS.length] ?? AGENT_PRESETS[0]
 }
 
-/** The name a new teammate takes: its own preset's name unless that is taken. */
+/**
+ * The name a new teammate takes: its own preset's name unless that is taken.
+ *
+ * A room can hold two teammates of the same kind — two researchers, say — and
+ * the second one must not be handed a name that belongs to a different preset.
+ * Calling a second researcher "Maya" would mean the frontend engineer's name is
+ * in the room without the frontend engineer, which is exactly the kind of
+ * identity confusion this module exists to prevent. Duplicates take a name from
+ * outside the preset set instead.
+ */
 export function nameForPreset(preset: AgentPreset, taken: readonly string[]): string {
   const used = new Set(taken.map((name) => name.toLowerCase()))
   if (!used.has(preset.name.toLowerCase())) return preset.name
+  for (const name of EXTRA_NAMES) {
+    if (!used.has(name.toLowerCase())) return name
+  }
   return unusedTeammateName(taken)
 }
 

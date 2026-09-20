@@ -83,6 +83,37 @@ and is fixed; a regression here is serious.
 **If you see:** all three saying "I need this room bound to a repo" → the
 project-binding grace period regressed. Tell me.
 
+### The roster is chosen from the goal (1 min)
+
+Teammates are picked to fit the goal, not dealt out in a fixed order. Section 2
+above used a software goal, so frontend/systems/quality is correct there. Prove
+the roster really is goal-driven by starting a **second** room with a goal that
+is plainly not software:
+
+> `Research competitors in the AI meeting-assistant space and write up a comparison`
+
+**Expect:** a research teammate leads the roster, and **nobody is there just to
+build screens**. A good answer looks like `Rio (research)`, plus a generalist or
+a quality teammate. You should get a notice naming the roster:
+
+> *"Staffed this room with research, qa and general for '…'."*
+
+**What each failure means:**
+
+| What you see | What it means |
+| --- | --- |
+| Always Maya, Alex, Sam regardless of goal | The roster call failed silently and even the keyword fallback did not run. |
+| A frontend engineer in a pure research room | See section 10 — is the goal actually research-shaped? But if the goal says *compare*, *competitors* or *write up*, that is a bug. |
+| Two teammates with the same name | The duplicate-name rule broke. Two of one kind must be named differently. |
+| No notice about the roster | The staffing notice is not reaching the client. |
+
+**This takes up to about 8 seconds** — it is a real model call. If the provider
+is slow or down it falls back to reading the goal's words, and then to the
+original fixed order, so a room always opens. A slow room is not a broken room.
+
+**What is *not* a bug:** a research goal that also gives you a quality teammate.
+Checking somebody else's research is a legitimate choice.
+
 ---
 
 ## 3 · Binding the project (2 min)

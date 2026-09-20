@@ -2,11 +2,13 @@
 
 **A live voice meeting where AI teammates do real software work with you.**
 
-You join a room, talk out loud, and three AI engineers — Maya (frontend), Alex (systems and
-integration) and Sam (quality) — work on a real project folder on your machine. They read the
-actual files, run real commands, open the app in a real remote browser, disagree with you and each
-other when requirements conflict, record decisions, and hand work to whoever owns it. You can
-interrupt, redirect, open anyone's workspace, and watch the result being verified.
+You join a room, say what it is for, talk out loud, and a small team of AI engineers works on a
+real project folder on your machine. The team is staffed from the goal: a build goal gets a
+frontend engineer, a systems engineer and a quality engineer; a research goal gets researchers
+instead of somebody to build screens. They read the actual files, run real commands, open the app
+in a real remote browser, disagree with you and each other when requirements conflict, record
+decisions, and hand work to whoever owns it. You can interrupt, redirect, open anyone's workspace,
+and watch the result being verified.
 
 Huddle is a desktop Electron application. It is not a chatbot, not a dashboard of metrics, and not
 scripted theatre: every activity in the interface is backed by a real tool run, a real command, a
@@ -137,8 +139,11 @@ npx electron . --remote-debugging-port=9222
 
 ## Using Huddle
 
-1. **Create or open a room** in the left sidebar. A new room starts with Maya, Alex and Sam, all
-   idle and honest about it.
+1. **Create or open a room** and say what it is for. The roster is picked to fit that goal — a
+   software goal gets a frontend engineer, a systems engineer and a quality engineer; a research
+   goal gets researchers instead of somebody to build screens. They start idle and honest about it.
+   The pick is one cheap model call (a keyword reading of the goal, then a fixed order, if the
+   provider is unreachable), and the room tells you which teammates it chose and why.
 2. **Bind the room to a real project.** Either *Choose folder* (any existing project) or *Use the
    demo project* — this copies `demo/sketch-night` into `.data/projects/` and gives the team a real
    repository with real bugs and contradictory notes.

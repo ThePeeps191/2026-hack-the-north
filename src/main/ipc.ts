@@ -16,6 +16,7 @@ import {
   type SetSecretInput,
   type VoiceOption
 } from '../shared/api.ts'
+import { MAX_AGENTS_PER_ROOM } from '../shared/types.ts'
 import type {
   AddAgentInput,
   AgentRole,
@@ -36,6 +37,7 @@ import type { PlaybackClientEvent } from '../shared/voice.ts'
 import type { AgentRuntime, BrowserHost, ExecutionHost, VoiceHost } from './contracts.ts'
 import { HuddleError, toErrorShape } from './huddle-error.ts'
 import { dataRoot } from './paths.ts'
+import { describeRoster } from './runtime/roster.ts'
 import type { RoomService } from './room-service.ts'
 
 /**
@@ -70,6 +72,16 @@ export interface IpcHost {
 }
 
 const ALLOWED_SENDER = /^(file:\/\/|https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?\/)/i
+
+/**
+ * The teammate count the room will really get, so the roster asks for exactly
+ * that many. Mirrors `clampAgentCount` in room-service: asking for a roster of
+ * five and then building a room of one would waste four of the choices.
+ */
+function clamped(agentCount: number | undefined): number {
+  if (agentCount === undefined || !Number.isFinite(agentCount)) return 1
+  return Math.min(MAX_AGENTS_PER_ROOM, Math.max(1, Math.round(agentCount)))
+}
 
 const ROLES: readonly AgentRole[] = ['frontend', 'systems', 'qa', 'research', 'design', 'general']
 const SURFACES: readonly ShareSurface[] = ['browser', 'code', 'terminal', 'files']
@@ -114,7 +126,33 @@ export function registerIpcHandlers(host: IpcHost, getWindow: () => BrowserWindo
     if (typeof value.agentCount === 'number' && Number.isFinite(value.agentCount)) {
       clean.agentCount = value.agentCount
     }
+
+    /*
+     * Staff the room from its goal, not from a fixed order.
+     *
+     * Teammate one used to always be the frontend engineer, whatever the room
+     * was for — so a room created to research a market got somebody to build
+     * screens and somebody to test them, and the research preset was
+     * unreachable. `planRoster` reads the goal; it falls back to a keyword
+     * reading and then to the old fixed order, so this can slow room creation
+     * by a second but can never stop it.
+     */
+    if (clean.goal) {
+      const roster = await host.runtime
+        .planRoster(clean.goal, clamped(clean.agentCount))
+        .catch(() => [])
+      if (roster.length > 0) clean.presetIds = roster
+    }
+
     const room = await service.createRoom(clean)
+    if (clean.presetIds && clean.presetIds.length > 0) {
+      service.notice(
+        room.id,
+        'info',
+        `Staffed this room with ${describeRoster(clean.presetIds)} for "${room.goal}".`,
+        'Add or remove teammates from the dock at any time.'
+      )
+    }
     await attachRuntime(host, room.id)
     return room
   })
