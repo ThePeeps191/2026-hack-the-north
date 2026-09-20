@@ -92,7 +92,7 @@ export function ShareFrame(props: ShareFrameProps): JSX.Element {
         {showFilmstrip ? <Filmstrip agents={agents} owner={owner} speaking={speaking} queuedAgentIds={queuedAgentIds} onSelectOwner={onSelectOwner} /> : <span className="hw-scope">Private conversation · shared project</span>}
       </div>
       <div className="hs-share-body hw-body">
-        {!room.project ? <div className="hw-empty"><h3>Bring your project into the room</h3><p>Choose a folder for the team to work on, or try Sketch Night.</p><div><Button variant="primary" onClick={onChooseProject}>Choose folder</Button><Button variant="quiet" onClick={onUseDemoProject}>Use demo project</Button></div></div> : renderSurface({surface, owner, workspace, agent, onAttachRef})}
+        {!room.project ? <div className="hw-empty"><h3>Bring a project into the room</h3><p>Choose a folder for the team to work on.</p><div><Button variant="primary" onClick={onChooseProject}>Choose folder</Button></div></div> : renderSurface({surface, owner, workspace, agent, onAttachRef})}
       </div>
     </section>
   )

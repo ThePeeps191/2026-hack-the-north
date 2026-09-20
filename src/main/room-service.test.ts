@@ -20,43 +20,42 @@ async function openService(): Promise<{
   return { service, filePath, dir }
 }
 
+async function withRoom(): Promise<{
+  service: RoomService
+  filePath: string
+  dir: string
+  room: Awaited<ReturnType<RoomService['createRoom']>>
+}> {
+  const opened = await openService()
+  const room = await opened.service.createRoom({ name: 'Test', agentCount: 3 })
+  return { ...opened, room }
+}
+
 describe('RoomService startup', () => {
-  test('a first launch seeds one room with the default roster', async () => {
+  test('a first launch is empty until the human creates a room', async () => {
     const { service, filePath } = await openService()
     const snapshot = service.snapshot()
 
-    assert.equal(snapshot.rooms.length, 1)
-    assert.equal(snapshot.selectedRoomId, snapshot.rooms[0].id)
-    assert.equal(snapshot.rooms[0].joined, false)
-    assert.equal(snapshot.rooms[0].project, null)
-    assert.equal(snapshot.rooms[0].decisionRevision, 0)
-
-    const names = snapshot.agents.map((agent) => agent.name).sort()
-    assert.deepEqual(names, ['Alex', 'Maya', 'Sam'])
-    for (const agent of snapshot.agents) {
-      // Nothing is running after a restart, so nothing claims to be.
-      assert.equal(agent.workState, 'offline')
-      assert.equal(agent.speechState, 'silent')
-      assert.equal(agent.connected, false)
-    }
+    assert.equal(snapshot.rooms.length, 0)
+    assert.equal(snapshot.selectedRoomId, null)
+    assert.equal(snapshot.agents.length, 0)
     assert.equal(snapshot.messages.length, 0)
     assert.equal(snapshot.call.connection, 'disconnected')
 
-    // The seeded state is on disk before it is shown.
     const stored = JSON.parse(await readFile(filePath, 'utf8')) as { rooms: unknown[] }
-    assert.equal(stored.rooms.length, 1)
+    assert.equal(stored.rooms.length, 0)
   })
 
   test('creating and switching rooms keeps messages in the correct room', async () => {
     const { service } = await openService()
-    const first = service.snapshot().rooms[0]
+    const first = await service.createRoom({ name: 'First room', agentCount: 2 })
     await service.sendHumanMessage({
       roomId: first.id,
       body: 'hello from first',
       clientRequestId: 'req-first'
     })
 
-    const second = await service.createRoom({ name: 'Second room' })
+    const second = await service.createRoom({ name: 'Second room', agentCount: 4 })
     await service.sendHumanMessage({
       roomId: second.id,
       body: 'hello from second',
@@ -69,13 +68,13 @@ describe('RoomService startup', () => {
     assert.equal(snapshot.rooms.length, 2)
     assert.equal(snapshot.messages.filter((m) => m.roomId === first.id).length, 1)
     assert.equal(snapshot.messages.filter((m) => m.roomId === second.id).length, 1)
-    // A new room brings its own roster.
-    assert.equal(snapshot.agents.filter((agent) => agent.roomId === second.id).length, 3)
+    assert.equal(snapshot.agents.filter((agent) => agent.roomId === first.id).length, 2)
+    assert.equal(snapshot.agents.filter((agent) => agent.roomId === second.id).length, 4)
   })
 
   test('renaming a room, setting its goal and adding an agent persist across reload', async () => {
     const { service, filePath, dir } = await openService()
-    const room = service.snapshot().rooms[0]
+    const room = await service.createRoom({ name: 'Start', agentCount: 1 })
     await service.updateRoom({ id: room.id, name: 'Harbor', goal: 'Ship the sketch game' })
     await service.addAgent({ roomId: room.id, presetId: 'rio' })
 
@@ -85,7 +84,7 @@ describe('RoomService startup', () => {
     const snapshot = reloaded.snapshot()
     assert.equal(snapshot.rooms[0].name, 'Harbor')
     assert.equal(snapshot.rooms[0].goal, 'Ship the sketch game')
-    assert.equal(snapshot.agents.length, 4)
+    assert.equal(snapshot.agents.length, 2)
     assert.ok(snapshot.agents.some((agent) => agent.presetId === 'rio'))
   })
 
@@ -104,8 +103,8 @@ describe('RoomService startup', () => {
 
 describe('messages', () => {
   test('retrying the same clientRequestId does not create a duplicate', async () => {
-    const { service } = await openService()
-    const roomId = service.snapshot().rooms[0].id
+    const { service, room } = await withRoom()
+    const roomId = room.id
     const first = await service.sendHumanMessage({ roomId, body: 'same', clientRequestId: 'dup-1' })
     const second = await service.sendHumanMessage({ roomId, body: 'same', clientRequestId: 'dup-1' })
     assert.equal(first.id, second.id)
@@ -113,8 +112,8 @@ describe('messages', () => {
   })
 
   test('the same utterance can never become two messages', async () => {
-    const { service } = await openService()
-    const roomId = service.snapshot().rooms[0].id
+    const { service, room } = await withRoom()
+    const roomId = room.id
     const first = await service.sendHumanMessage({
       roomId,
       body: 'make voting anonymous',
@@ -135,8 +134,8 @@ describe('messages', () => {
   })
 
   test('rapid distinct submissions persist every message once', async () => {
-    const { service } = await openService()
-    const roomId = service.snapshot().rooms[0].id
+    const { service, room } = await withRoom()
+    const roomId = room.id
     const bodies = ['one', 'two', 'three', 'four', 'five']
     const results = await Promise.all(
       bodies.map((body, index) =>
@@ -148,8 +147,8 @@ describe('messages', () => {
   })
 
   test('empty messages and unknown rooms are refused', async () => {
-    const { service } = await openService()
-    const roomId = service.snapshot().rooms[0].id
+    const { service, room } = await withRoom()
+    const roomId = room.id
     await assert.rejects(
       () => service.sendHumanMessage({ roomId, body: '   ', clientRequestId: 'blank' }),
       /nothing to send/i
@@ -161,8 +160,8 @@ describe('messages', () => {
   })
 
   test('a message addressed to an agent keeps only real recipients', async () => {
-    const { service } = await openService()
-    const roomId = service.snapshot().rooms[0].id
+    const { service, room } = await withRoom()
+    const roomId = room.id
     const alex = service.getAgents(roomId).find((agent) => agent.presetId === 'alex')
     assert.ok(alex)
     const message = await service.sendHumanMessage({
@@ -204,7 +203,7 @@ describe('durability', () => {
     const first = await RoomService.open(new JsonSnapshotStore(filePath), {
       log: new EventLog(join(dir, 'events.jsonl'))
     })
-    const room = first.snapshot().rooms[0]
+    const room = await first.createRoom({ name: 'Resume', agentCount: 1 })
     const agent = first.getAgents(room.id)[0]
     first.upsertJob({
       id: 'job-1',
@@ -241,8 +240,7 @@ describe('durability', () => {
 
 describe('decisions', () => {
   test('a decision opens a revision and marks earlier tasks stale', async () => {
-    const { service } = await openService()
-    const room = service.snapshot().rooms[0]
+    const { service, room } = await withRoom()
     const agent = service.getAgents(room.id)[0]
     const now = new Date().toISOString()
 
@@ -287,17 +285,15 @@ describe('decisions', () => {
 })
 
 describe('rooms, agents and events', () => {
-  test('rooms are capped at four agents', async () => {
+  test('rooms are capped at ten agents', async () => {
     const { service } = await openService()
-    const roomId = service.snapshot().rooms[0].id
-    await service.addAgent({ roomId, presetId: 'rio' })
-    await assert.rejects(() => service.addAgent({ roomId, presetId: 'nova' }), /at most 4/i)
-    assert.equal(service.getAgents(roomId).length, 4)
+    const room = await service.createRoom({ name: 'Full', agentCount: 10 })
+    await assert.rejects(() => service.addAgent({ roomId: room.id, presetId: 'rio' }), /at most 10/i)
+    assert.equal(service.getAgents(room.id).length, 10)
   })
 
   test('removing an agent releases its unfinished tasks', async () => {
-    const { service } = await openService()
-    const room = service.snapshot().rooms[0]
+    const { service, room } = await withRoom()
     const sam = service.getAgents(room.id).find((agent) => agent.presetId === 'sam')
     assert.ok(sam)
     service.upsertTask({
@@ -328,8 +324,8 @@ describe('rooms, agents and events', () => {
 
   test('only one room is joined at a time', async () => {
     const { service } = await openService()
-    const first = service.snapshot().rooms[0].id
-    const second = await service.createRoom({ name: 'Other' })
+    const first = (await service.createRoom({ name: 'One', agentCount: 1 })).id
+    const second = await service.createRoom({ name: 'Other', agentCount: 1 })
     await service.setJoined(first, true)
     await service.setJoined(second.id, true)
     assert.equal(service.getRoom(first)?.joined, false)
@@ -351,8 +347,9 @@ describe('rooms, agents and events', () => {
   })
 
   test('ephemeral events never reach the durable snapshot', async () => {
-    const { service, filePath } = await openService()
-    const roomId = service.snapshot().rooms[0].id
+    const { service, filePath, room } = await withRoom()
+    const roomId = room.id
+    await new Promise((resolve) => setTimeout(resolve, 50))
     const before = await readFile(filePath, 'utf8')
 
     // A heartbeat of levels, job output and partial transcripts is streamed to
@@ -368,8 +365,18 @@ describe('rooms, agents and events', () => {
 
     await new Promise((resolve) => setTimeout(resolve, 500))
 
-    assert.equal(await readFile(filePath, 'utf8'), before)
-    assert.equal(service.snapshot().events.length, 27)
+    const beforeState = JSON.parse(before) as { rooms: unknown; agents: unknown; messages: unknown; jobs: unknown }
+    const afterState = JSON.parse(await readFile(filePath, 'utf8')) as {
+      rooms: unknown
+      agents: unknown
+      messages: unknown
+      jobs: unknown
+    }
+    assert.deepEqual(afterState.rooms, beforeState.rooms)
+    assert.deepEqual(afterState.agents, beforeState.agents)
+    assert.deepEqual(afterState.messages, beforeState.messages)
+    assert.deepEqual(afterState.jobs, beforeState.jobs)
+    assert.ok(service.snapshot().events.length >= 27)
   })
 
   test('subscribe cleanup prevents further events', async () => {
@@ -397,7 +404,7 @@ describe('corrupt state', () => {
     assert.ok(snapshot.recovery)
     assert.match(snapshot.recovery?.backupPath ?? '', /\.corrupt-/)
     assert.match(snapshot.recovery?.message ?? '', /could not read/i)
-    assert.equal(snapshot.rooms.length, 1)
+    assert.equal(snapshot.rooms.length, 0)
     assert.equal(await readFile(snapshot.recovery!.backupPath, 'utf8'), '{ nope')
   })
 

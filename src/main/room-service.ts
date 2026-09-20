@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { AGENT_PRESETS, DEFAULT_ROSTER, getAgentPreset } from '../shared/presets.ts'
+import { AGENT_PRESETS, getAgentPreset, presetForIndex, unusedTeammateName } from '../shared/presets.ts'
 import {
   DEFAULT_SETTINGS,
   EPHEMERAL_EVENT_TYPES,
@@ -314,6 +314,35 @@ export class RoomService implements HuddleBus {
     return { ...agent }
   }
 
+  upsertAgent(agent: Agent): Agent {
+    const existing = this.state.agents.find((item) => item.id === agent.id)
+    if (existing) {
+      Object.assign(existing, agent)
+      this.emit(existing.roomId, { type: 'agent.updated', agent: { ...existing } })
+      return { ...existing }
+    }
+    this.state.agents.push(agent)
+    this.emit(agent.roomId, { type: 'agent.added', agent: { ...agent } })
+    return { ...agent }
+  }
+
+  removeAgentById(agentId: string): boolean {
+    const agent = this.state.agents.find((item) => item.id === agentId)
+    if (!agent) return false
+    this.state.agents = this.state.agents.filter((item) => item.id !== agentId)
+    for (const task of this.state.tasks) {
+      if (task.ownerAgentId === agentId && !isTerminal(task.status)) {
+        task.ownerAgentId = null
+        task.status = 'proposed'
+        task.blockedReason = `${agent.name} left the room; this task needs a new owner.`
+        task.updatedAt = this.now()
+        this.emit(agent.roomId, { type: 'task.upserted', task })
+      }
+    }
+    this.emit(agent.roomId, { type: 'agent.removed', agentId })
+    return true
+  }
+
   upsertTask(task: Task): void {
     upsertById(this.state.tasks, task)
     this.emit(task.roomId, { type: 'task.upserted', task })
@@ -484,7 +513,16 @@ export class RoomService implements HuddleBus {
       decisionRevision: 0
     }
 
-    const agents = DEFAULT_ROSTER.map((presetId) => buildAgent(room.id, presetId, this.newId(), now))
+    const count = clampAgentCount(input.agentCount)
+    const agents: Agent[] = []
+    const names: string[] = []
+    for (let index = 0; index < count; index += 1) {
+      const preset = presetForIndex(index)
+      const agent = buildAgent(room.id, preset.id, this.newId(), now)
+      agent.name = unusedTeammateName(names)
+      names.push(agent.name)
+      agents.push(agent)
+    }
 
     await this.commit(() => {
       this.state.rooms.push(room)
@@ -636,6 +674,7 @@ export class RoomService implements HuddleBus {
     if (!agent) throw new HuddleError('unknown_agent', 'That teammate is no longer in the room.')
     const next: Agent = { ...agent, updatedAt: this.now() }
     if (input.name?.trim()) next.name = input.name.trim().slice(0, 40)
+    if (input.title !== undefined) next.title = input.title.trim().slice(0, 48)
     if (input.role) next.role = input.role
     if (input.persona) next.persona = input.persona
     if (input.model) next.model = input.model
@@ -1043,6 +1082,7 @@ export function buildAgent(
     roomId,
     presetId: preset.id,
     name: preset.name,
+    title: '',
     role: preset.role,
     summary: preset.summary,
     persona: preset.persona,
@@ -1116,26 +1156,12 @@ function sameMode(a: StageState['mode'], b: StageState['mode']): boolean {
  * the demo project, so the team can never silently work on Huddle itself.
  */
 export function seedState(): PersistedState {
-  const now = new Date().toISOString()
-  const roomId = randomUUID()
-  const room: Room = {
-    id: roomId,
-    name: defaultRoomName(0),
-    goal: '',
-    createdAt: now,
-    updatedAt: now,
-    stage: { mode: { kind: 'gallery' }, follow: true, pendingHint: null },
-    project: null,
-    joined: false,
-    decisionRevision: 0
-  }
+  return emptyState()
+}
 
-  return {
-    ...emptyState(),
-    rooms: [room],
-    agents: DEFAULT_ROSTER.map((presetId) => buildAgent(roomId, presetId, randomUUID(), now)),
-    selectedRoomId: roomId
-  }
+function clampAgentCount(value: number | undefined): number {
+  if (value === undefined || !Number.isFinite(value)) return 1
+  return Math.min(MAX_AGENTS_PER_ROOM, Math.max(1, Math.round(value)))
 }
 
 const MAX_RESUMABLE = 12

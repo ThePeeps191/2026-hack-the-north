@@ -52,8 +52,9 @@ export interface ConversationOutcome {
 }
 
 const CONVERSATION_RULES = `
-You are answering a question out loud, in the middle of a live call, while work continues.
-- Answer from the state below only. It is the room's real, current record.
+You are answering out loud, in the middle of a live call, while work continues.
+- If the human is greeting you or asking whether you can hear them, greet them back as yourself in one short sentence.
+- Otherwise answer from the state below only. It is the room's real, current record.
 - If the state does not contain the answer, say plainly that you do not know yet and what you would check.
 - Never claim progress, results or tests that the state does not show. Never say "probably".
 - One or two sentences. Spoken length. No lists, no headings, no markdown.

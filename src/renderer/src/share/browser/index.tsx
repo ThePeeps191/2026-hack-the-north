@@ -526,19 +526,9 @@ export function BrowserSurface(props: SurfaceProps): JSX.Element {
           )}
           <span className="browser-spacer" />
           {liveViewAvailable && session !== null ? (
-            <a
-              href={session.liveViewUrl ?? ''}
-              target="_blank"
-              rel="noreferrer"
-              className="browser-live-view"
-              title={session.liveViewUrl ?? ''}
-            >
-              Open the live view of this session ↗
-            </a>
+            <span className="browser-subtle">Live session</span>
           ) : session !== null ? (
-            <span className="browser-subtle">
-              Browserbase returned no live-view URL for this session
-            </span>
+            <span className="browser-subtle">No live view URL yet</span>
           ) : null}
         </div>
 
@@ -646,8 +636,17 @@ export function BrowserSurface(props: SurfaceProps): JSX.Element {
         ) : null}
       </div>
 
+      {liveViewAvailable && session?.liveViewUrl ? (
+        <iframe
+          className="browser-live"
+          title="Live remote browser"
+          src={session.liveViewUrl}
+          allow="clipboard-read; clipboard-write"
+        />
+      ) : null}
+
       {/* ---------------- body ---------------- */}
-      <div className="browser-body">
+      <div className={`browser-body${liveViewAvailable ? ' is-hidden' : ''}`}>
         <div className="browser-capture-column">
           <div className="browser-capture-meta">
             {currentCapture !== null ? (

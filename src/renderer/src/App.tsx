@@ -8,6 +8,7 @@ import type {
   WorkspaceRecord
 } from '../../shared/types'
 import { CallScreen } from './call/index'
+import { LaunchScreen } from './call/LaunchScreen'
 import { BrowserSurface } from './share/browser/index'
 import { CodeSurface } from './share/code/index'
 import type { SurfaceOwner, SurfaceProps } from './share/contract'
@@ -42,11 +43,7 @@ export default function App(): JSX.Element {
 
   const room: Room | null = useMemo(() => {
     if (!snapshot) return null
-    return (
-      snapshot.rooms.find((item) => item.id === snapshot.selectedRoomId) ??
-      snapshot.rooms[0] ??
-      null
-    )
+    return snapshot.rooms.find((item) => item.id === snapshot.selectedRoomId) ?? null
   }, [snapshot])
 
   const roomId = room?.id ?? ''
@@ -82,12 +79,21 @@ export default function App(): JSX.Element {
     )
   }
 
-  if (!snapshot || !room) {
+  if (!snapshot) {
     return (
       <div className="boot">
-        <h1>No room yet</h1>
-        <p>Huddle could not find a room to open.</p>
+        <p>Waking up Huddle…</p>
       </div>
+    )
+  }
+
+  if (!room) {
+    return (
+      <LaunchScreen
+        rooms={snapshot.rooms}
+        onCreate={(name, agentCount) => actions.createRoom({ name, agentCount })}
+        onOpen={(roomId) => void actions.selectRoom(roomId)}
+      />
     )
   }
 

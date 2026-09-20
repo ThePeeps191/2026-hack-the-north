@@ -47,7 +47,7 @@ export function createActions({ roomId, getCall, setError, voice }: ActionContex
     run(() => window.huddle.setStage({ roomId, stage }))
 
   return {
-    createRoom: () => run(() => window.huddle.createRoom({})),
+    createRoom: (input) => run(() => window.huddle.createRoom(input ?? {})),
 
     selectRoom: (id: string) => run(() => window.huddle.selectRoom(id)),
 

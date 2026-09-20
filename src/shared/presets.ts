@@ -157,8 +157,33 @@ export function getAgentPreset(id: string): AgentPreset | undefined {
   return AGENT_PRESETS.find((preset) => preset.id === id)
 }
 
-/** Default roster for a new software room. */
+/** Default roster for a new software room. Unused: rooms start empty of fixed personas. */
 export const DEFAULT_ROSTER: readonly AgentPresetId[] = ['maya', 'alex', 'sam']
+
+export const TEAMMATE_NAMES = [
+  'Sam',
+  'Maya',
+  'Alex',
+  'Jordan',
+  'Quinn',
+  'Reese',
+  'Kai',
+  'Drew',
+  'Eden',
+  'Rowan'
+] as const
+
+export function unusedTeammateName(taken: readonly string[]): string {
+  const used = new Set(taken.map((name) => name.toLowerCase()))
+  for (const name of TEAMMATE_NAMES) {
+    if (!used.has(name.toLowerCase())) return name
+  }
+  return `Teammate ${taken.length + 1}`
+}
+
+export function presetForIndex(index: number): AgentPreset {
+  return AGENT_PRESETS[index % AGENT_PRESETS.length] ?? AGENT_PRESETS[0]
+}
 
 export const HUMAN_COLOR = '#4c5561'
 export const HUMAN_AVATAR = 'human'

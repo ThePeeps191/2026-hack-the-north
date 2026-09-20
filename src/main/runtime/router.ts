@@ -259,6 +259,21 @@ export function hasWorkVerb(body: string): boolean {
   return words(body).some((word) => WORK_VERBS.has(word))
 }
 
+export function isRoomGreeting(body: string): boolean {
+  const tokens = words(body)
+  const hello = tokens.some((token) => token === 'hi' || token === 'hello' || token === 'hey' || token === 'yo')
+  const group = tokens.some(
+    (token) =>
+      token === 'agents' ||
+      token === 'everyone' ||
+      token === 'team' ||
+      token === 'all' ||
+      token === 'anybody' ||
+      token === 'anyone'
+  )
+  return hello && (group || tokens.includes('hear'))
+}
+
 /** Stable key so an agent acknowledges a given assignment at most once. */
 export function acknowledgementKey(messageId: string): string {
   return `ack:${messageId}`
@@ -445,6 +460,15 @@ export function routeMessage(input: RouterInput): RouterDecision {
       kind: 'ignore',
       targets: [],
       reason: 'a bare acknowledgement needs no turn',
+      taskId: null
+    }
+  }
+
+  if (!work && isRoomGreeting(body)) {
+    return {
+      kind: 'conversation',
+      targets: agents.map((agent) => agent.id),
+      reason: 'greeting to the room',
       taskId: null
     }
   }

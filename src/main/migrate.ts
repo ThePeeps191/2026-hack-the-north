@@ -302,6 +302,7 @@ export function normalizeAgent(raw: Record<string, unknown>, now: string): Agent
     roomId,
     presetId: preset.id,
     name: str(raw.name) || preset.name,
+    title: str(raw.title),
     role: ROLES.includes(roleRaw) ? roleRaw : preset.role,
     summary: str(raw.summary) || preset.summary,
     persona: str(raw.persona) || preset.persona,

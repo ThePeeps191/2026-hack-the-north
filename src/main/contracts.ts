@@ -73,6 +73,8 @@ export interface HuddleBus {
   upsertIntegration(attempt: IntegrationAttempt): void
   addArtifact(artifact: Artifact): void
   updateAgent(agentId: string, patch: Partial<Agent>): Agent | null
+  upsertAgent(agent: Agent): Agent
+  removeAgentById(agentId: string): boolean
   upsertTask(task: Task): void
   recordTimings(samples: TimingSample[]): void
 

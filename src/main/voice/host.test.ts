@@ -35,6 +35,7 @@ function makeAgent(id: string, name: string): Agent {
     roomId: 'room-1',
     presetId: 'maya',
     name,
+    title: '',
     role: 'frontend',
     summary: 'test agent',
     persona: 'test',

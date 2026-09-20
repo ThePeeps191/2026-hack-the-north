@@ -31,7 +31,9 @@ import type {
   ToolRun,
   WorkspaceRecord
 } from '../../shared/types.ts'
-import { MAX_TOOL_OUTPUT_CHARS } from '../../shared/types.ts'
+import { MAX_AGENTS_PER_ROOM, MAX_TOOL_OUTPUT_CHARS } from '../../shared/types.ts'
+import { presetForIndex, unusedTeammateName } from '../../shared/presets.ts'
+import { buildAgent } from '../room-service.ts'
 import type { BrowserActionInput, RuntimeDeps } from '../contracts.ts'
 import { HuddleError, toErrorShape } from '../huddle-error.ts'
 import { redact } from '../config/secrets.ts'
@@ -1541,6 +1543,99 @@ const presentWorkspace = defineTool<{ title: string; summary: string; taskId: st
   }
 })
 
+const addTeammate = defineTool<{ name: string; assignment: string }>({
+  name: 'add_teammate',
+  description:
+    'Add a new teammate to this room. Use when the human asks to add, create, or bring in another agent. The new teammate gets a real name and can take work.',
+  parameters: schema({
+    name: str('Preferred name. Leave empty to pick an unused name.'),
+    assignment: str('Optional first assignment for them.')
+  }),
+  validate(raw) {
+    const a = new ArgReader(raw)
+    const name = a.str('name', { max: 40 })
+    const assignment = a.str('assignment', { max: 400 })
+    return a.finish(() => ({ name, assignment }))
+  },
+  async run(args, ctx) {
+    const existing = ctx.deps.bus.getAgents(ctx.roomId)
+    if (existing.length >= MAX_AGENTS_PER_ROOM) {
+      const message = `The room already has ${existing.length} teammates (max ${MAX_AGENTS_PER_ROOM}).`
+      return { summary: 'Room is full', content: message, error: message, rejected: true }
+    }
+    const name = args.name.trim() || unusedTeammateName(existing.map((agent) => agent.name))
+    if (existing.some((agent) => agent.name.toLowerCase() === name.toLowerCase())) {
+      const message = `${name} is already in the room.`
+      return { summary: 'Name taken', content: message, error: message, rejected: true }
+    }
+    const preset = presetForIndex(existing.length)
+    const agent = buildAgent(ctx.roomId, preset.id, ctx.deps.bus.newId(), ctx.deps.bus.now())
+    agent.name = name
+    ctx.deps.bus.upsertAgent(agent)
+    ctx.bridge.notify(agent.id, {
+      kind: 'onboarding',
+      summary: args.assignment.trim() ? `You joined. First assignment: ${args.assignment.trim()}` : 'You joined the room.',
+      note: args.assignment.trim()
+    })
+    ctx.bridge.kick(ctx.roomId)
+    return {
+      summary: `Added ${agent.name} to the room`,
+      content: `${agent.name} is in the room now (${existing.length + 1}/${MAX_AGENTS_PER_ROOM}).`
+    }
+  }
+})
+
+const removeTeammate = defineTool<{ name: string }>({
+  name: 'remove_teammate',
+  description: 'Remove a teammate from this room. Use when the human asks to remove, drop, or kick an agent. You cannot remove yourself.',
+  parameters: schema({ name: str('Teammate name or id to remove.') }, ['name']),
+  validate(raw) {
+    const a = new ArgReader(raw)
+    const name = a.str('name', { required: true, max: 80 })
+    return a.finish(() => ({ name }))
+  },
+  async run(args, ctx) {
+    const target = resolveAgent(ctx.deps, ctx.roomId, args.name)
+    if (!target) {
+      const message = `No teammate called "${args.name}" in this room.`
+      return { summary: 'Unknown teammate', content: message, error: message, rejected: true }
+    }
+    if (target.id === ctx.agentId) {
+      const message = 'You cannot remove yourself. Ask the human or another teammate.'
+      return { summary: 'Refused self-remove', content: message, error: message, rejected: true }
+    }
+    ctx.deps.bus.removeAgentById(target.id)
+    return {
+      summary: `Removed ${target.name}`,
+      content: `${target.name} left the room. Their unfinished tasks need a new owner.`
+    }
+  }
+})
+
+const setTitle = defineTool<{ title: string }>({
+  name: 'set_title',
+  description:
+    'Set your working title, shown next to your name like "Sam (Competitor Research)". Use this once you know what you own.',
+  parameters: schema({ title: str('Short working title. Empty string clears it.') }, ['title']),
+  validate(raw) {
+    const a = new ArgReader(raw)
+    const title = a.str('title', { required: true, max: 48 })
+    return a.finish(() => ({ title }))
+  },
+  async run(args, ctx) {
+    const title = args.title.trim()
+    const updated = ctx.deps.bus.updateAgent(ctx.agentId, { title })
+    if (!updated) {
+      const message = 'Could not update your title; you are no longer in the room.'
+      return { summary: 'Missing agent', content: message, error: message, rejected: true }
+    }
+    return {
+      summary: title ? `Title set to ${title}` : 'Title cleared',
+      content: title ? `You are now ${updated.name} (${title}).` : `You are now just ${updated.name}.`
+    }
+  }
+})
+
 /* ------------------------------------------------------------------ *
  * The registry
  * ------------------------------------------------------------------ */
@@ -1578,7 +1673,10 @@ export const TOOL_DEFINITIONS: readonly ErasedTool[] = [
   recordMemory,
   submitWork,
   runIntegration,
-  presentWorkspace
+  presentWorkspace,
+  addTeammate,
+  removeTeammate,
+  setTitle
 ]
 
 export class ToolRegistry {

@@ -67,15 +67,17 @@ export function Dock(props: DockProps): JSX.Element {
   const [menuOpen, setMenuOpen] = useState(false)
   const { call, human, connection, stage } = props
   const live = connection.live
+  const inCall = connection.inCall
   const speaking = call.speakingAgentId !== null
   const full = props.agents.length >= MAX_AGENTS_PER_ROOM
+  const joinLabel = !inCall ? 'Join call' : call.connection === 'connecting' ? 'Connecting...' : 'Leave'
   return <div className="hs-dock hd-dock" role="toolbar" aria-label="Call controls">
-    <Button variant={live ? 'danger' : 'primary'} disabled={call.connection === 'connecting'} onClick={live ? props.onLeave : props.onJoin} hint={live ? 'Leave the call. Team work continues.' : 'Join with local microphone and teammate audio'}><span className="hs-btn-inner">{live ? <LeaveCallIcon size={15}/> : <EnterCallIcon size={15}/>}<span className="hd-join-label">{live ? 'Leave' : call.connection === 'connecting' ? 'Connecting...' : 'Join call'}</span></span></Button>
+    <Button variant={inCall ? 'danger' : 'primary'} onClick={inCall ? props.onLeave : props.onJoin} hint={inCall ? 'Leave the call. Team work continues.' : 'Join with local microphone and teammate audio'}><span className="hs-btn-inner">{inCall ? <LeaveCallIcon size={15}/> : <EnterCallIcon size={15}/>}<span className="hd-join-label">{joinLabel}</span></span></Button>
     <IconButton label={human.muted ? 'Unmute microphone' : 'Mute microphone'} disabled={!live} pressed={human.muted} onClick={props.onToggleMic} hint={live ? 'Toggle your microphone; work continues' : 'Join the call first'} shortcut="Ctrl+Shift+M">{human.muted ? <MicOffIcon/> : <MicIcon/>}</IconButton>
     <IconButton label={human.deafened ? 'Undeafen' : 'Deafen'} disabled={!live} pressed={human.deafened} onClick={props.onToggleDeafen} hint={live ? 'Toggle teammate audio; work continues' : 'Join the call first'} shortcut="Ctrl+Shift+D">{human.deafened ? <HeadphonesOffIcon/> : <HeadphonesIcon/>}</IconButton>
     <IconButton label="Stop current speech" disabled={!live || !speaking} onClick={() => props.onStopSpeaking('current')} hint="Stop the current speaker; work continues"><StopIcon/></IconButton>
     <span className="hd-spacer"/>
-    <div className="hs-addagent"><IconButton label="Add teammate" disabled={full} pressed={menuOpen} onClick={() => setMenuOpen(v => !v)} hint={full ? 'This room has four teammates. Remove one to add another.' : 'Add a teammate'}><PlusIcon/></IconButton>{menuOpen ? <AddTeammateMenu agents={props.agents} onClose={() => setMenuOpen(false)} onAdd={props.onAddAgent}/> : null}</div>
+    <div className="hs-addagent"><IconButton label="Add teammate" disabled={full} pressed={menuOpen} onClick={() => setMenuOpen(v => !v)} hint={full ? 'This room is full. Remove one teammate to add another.' : 'Add a teammate'}><PlusIcon/></IconButton>{menuOpen ? <AddTeammateMenu agents={props.agents} onClose={() => setMenuOpen(false)} onAdd={props.onAddAgent}/> : null}</div>
     <IconButton label={stage.mode.kind === 'gallery' ? 'Team workspace' : 'Gallery'} onClick={stage.mode.kind === 'gallery' ? props.onShowTeamShare : props.onShowGallery} hint={stage.mode.kind === 'gallery' ? 'Open the shared workspace' : 'Back to the room'}>{stage.mode.kind === 'gallery' ? <MonitorIcon/> : <GridIcon/>}</IconButton>
     <IconButton label={props.railOpen ? 'Hide room panel' : 'Show room panel'} pressed={props.railOpen} onClick={props.onToggleRail} hint="Conversation, questions, decisions and work" shortcut="Ctrl+Shift+E"><ChatIcon/></IconButton>
     <details className="hd-more"><summary aria-label="More call controls">•••</summary><div>

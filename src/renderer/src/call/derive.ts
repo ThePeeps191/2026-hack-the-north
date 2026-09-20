@@ -26,41 +26,48 @@ export interface ConnectionStatus {
   detail: string
   tone: Tone
   live: boolean
+  /** True once you have joined this room, even if the microphone failed. */
+  inCall: boolean
 }
 
 export function connectionStatus(call: CallState, room: Room): ConnectionStatus {
-  if (call.connection === 'connected' && call.roomId === room.id) {
-    return { label: 'Connected', detail: 'Live audio for this room', tone: 'live', live: true }
+  const inThisRoom = call.roomId === room.id
+  if (call.connection === 'connected' && inThisRoom) {
+    return { label: 'Connected', detail: 'Live audio for this room', tone: 'live', live: true, inCall: true }
   }
-  if (call.connection === 'connecting') {
+  if (call.connection === 'connecting' && inThisRoom) {
     return {
       label: 'Connecting',
       detail: 'Opening the microphone and playback',
       tone: 'wait',
-      live: false
+      live: false,
+      inCall: true
     }
   }
-  if (call.connection === 'error') {
+  if (call.connection === 'error' && (inThisRoom || room.joined)) {
     return {
       label: 'Connection error',
       detail: call.error ?? 'The audio connection failed',
       tone: 'stop',
-      live: false
+      live: false,
+      inCall: room.joined || inThisRoom
     }
   }
   if (room.joined) {
     return {
-      label: 'Audio offline',
-      detail: 'The room is marked joined but there is no live audio connection',
+      label: 'In call',
+      detail: 'You are in this room. Microphone audio is offline.',
       tone: 'wait',
-      live: false
+      live: false,
+      inCall: true
     }
   }
   return {
     label: 'Not in call',
     detail: 'Join the call to talk to the team and hear replies',
     tone: 'quiet',
-    live: false
+    live: false,
+    inCall: false
   }
 }
 

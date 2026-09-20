@@ -36,7 +36,7 @@
 .hs-spotlight.hw-spotlight { padding:0; display:flex; flex-direction:column; flex:1; min-height:0; overflow:hidden; }
 .hw-workstage-focus .hw-header { min-height:72px; }
 @media (max-width:1400px) {
-  .hd-join-label { display:none; }
+  .hd-join-label { display:inline; }
   .hw-tabs button { padding:0 7px; gap:4px; }
 }
 @media (max-width:1350px) {

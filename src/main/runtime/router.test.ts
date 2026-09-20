@@ -41,6 +41,12 @@ describe('routeMessage', () => {
     assert.equal(decision.targets.length, 1)
   })
 
+  test('a greeting to the room is conversation for every teammate', () => {
+    const decision = routeMessage(input(human('hi agents respond with a greeting if you can hear me')))
+    assert.equal(decision.kind, 'conversation')
+    assert.deepEqual(decision.targets.slice().sort(), ['alex', 'maya', 'sam'])
+  })
+
   test('an owner already working on the topic keeps it', () => {
     const decision = routeMessage(
       input(human('Can you extend the vote panel with a percentage?'), {

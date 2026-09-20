@@ -64,6 +64,7 @@ function mockAgent(
     roomId: ROOM_ID,
     presetId: source.id,
     name: source.name,
+    title: '',
     role: source.role,
     summary: source.summary,
     persona: source.persona,

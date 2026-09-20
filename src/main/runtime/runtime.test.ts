@@ -278,7 +278,7 @@ describe('conversation path', () => {
     const request = provider.requests[0]
     assert.equal(request.tools.length, 0)
     assert.equal(request.model, deps.bus.settings.models.conversation)
-    assert.match(request.instructions, /Answer from the state below only/)
+    assert.match(request.instructions, /answer from the state below only/i)
 
     const reply = deps.bus.messages.find((message) => message.kind === 'answer')
     assert.ok(reply)

@@ -23,6 +23,11 @@ import type {
  * no helper invents state, counts, or activity of its own.
  */
 
+export function agentDisplayName(agent: { name: string; title?: string }): string {
+  const title = agent.title?.trim()
+  return title ? `${agent.name} (${title})` : agent.name
+}
+
 const SURFACE_LABELS: Record<ShareSurface, string> = {
   browser: 'Browser',
   code: 'Code',

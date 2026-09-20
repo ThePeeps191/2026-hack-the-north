@@ -201,9 +201,7 @@ export function SettingsDialog({
             <Button variant="primary" onClick={onChooseProject} hint="Binds an existing folder">
               Choose folder
             </Button>
-            <Button variant="quiet" onClick={onUseDemoProject} hint="Copies the bundled demo project">
-              Use demo project
-            </Button>
+            {/* Sketch Night demo bind is parked. Bind a real folder instead. */}
           </p>
         )}
       </section>

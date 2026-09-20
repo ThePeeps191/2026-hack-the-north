@@ -3,6 +3,7 @@ import type { Agent } from '../../../shared/types'
 import type { HumanPresence, SpeakingState } from '../state/view-model'
 import { AvatarMark } from './avatars'
 import {
+  agentDisplayName,
   formatRelative,
   roleLabel,
   speechLabel,
@@ -102,10 +103,10 @@ export function AgentTile({
         </span>
         <span className="hs-tile-ident">
           <span className="hs-tile-name">
-            {agent.name}
+            {agentDisplayName(agent)}
             {speaking ? <span className="hs-tile-speaking-tag">{speechLabel('speaking')}</span> : null}
           </span>
-          <span className="hs-tile-role">{roleLabel(agent.role)}</span>
+          <span className="hs-tile-role">{agent.role === 'general' ? agent.activityLabel : roleLabel(agent.role)}</span>
           <span className="hs-tile-activity">{agent.activityLabel}</span>
         </span>
       </button>
@@ -248,10 +249,10 @@ export function HumanTile({
           ) : null}
         </span>
         <span className="hs-tile-actions">
-          {connected ? (
+          {joined || connected ? (
             <IconButton
               label="Leave the call"
-              hint="Stops capture and playback for this room"
+              hint="Leave this room. Team work continues."
               size="sm"
               onClick={onLeave}
             >

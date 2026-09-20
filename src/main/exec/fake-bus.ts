@@ -57,6 +57,7 @@ export function fakeAgent(roomId: string, id: string, name: string): Agent {
     roomId,
     presetId: 'maya',
     name,
+    title: '',
     role: 'frontend',
     summary: `${name} test agent`,
     persona: `${name} is a test agent.`,
@@ -147,6 +148,13 @@ export function createFakeBus(): FakeBus {
       const next = { ...agent, ...patch }
       bus.agents.set(agentId, next)
       return next
+    },
+    upsertAgent(agent) {
+      bus.agents.set(agent.id, { ...agent })
+      return { ...agent }
+    },
+    removeAgentById(agentId) {
+      return bus.agents.delete(agentId)
     },
     upsertTask() {
       // Not exercised by execution tests.

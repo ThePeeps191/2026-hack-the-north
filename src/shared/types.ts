@@ -48,6 +48,8 @@ export interface Agent {
   roomId: string
   presetId: AgentPresetId
   name: string
+  /** Working title the teammate chose, e.g. "Competitor Research". Empty until set. */
+  title: string
   role: AgentRole
   /** One-line role summary shown on the tile. */
   summary: string
@@ -682,6 +684,8 @@ export interface AppSnapshot extends PersistedState {
 export interface CreateRoomInput {
   name?: string
   goal?: string
+  /** How many teammates to create. Clamped to 1–MAX_AGENTS_PER_ROOM. */
+  agentCount?: number
 }
 
 export interface UpdateRoomInput {
@@ -704,6 +708,7 @@ export interface AddAgentInput {
 export interface UpdateAgentInput {
   agentId: string
   name?: string
+  title?: string
   role?: AgentRole
   voiceId?: string
   persona?: string
@@ -759,7 +764,7 @@ export type IpcResult<T> = { ok: true; value: T } | { ok: false; error: HuddleEr
  * Limits
  * ------------------------------------------------------------------ */
 
-export const MAX_AGENTS_PER_ROOM = 4
+export const MAX_AGENTS_PER_ROOM = 10
 export const MAX_EVENT_HISTORY = 400
 export const MAX_ROOM_NAME = 80
 export const MAX_ROOM_GOAL = 600

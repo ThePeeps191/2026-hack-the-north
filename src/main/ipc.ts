@@ -111,6 +111,9 @@ export function registerIpcHandlers(host: IpcHost, getWindow: () => BrowserWindo
     const goal = optionalString(value.goal)
     if (name) clean.name = name
     if (goal) clean.goal = goal
+    if (typeof value.agentCount === 'number' && Number.isFinite(value.agentCount)) {
+      clean.agentCount = value.agentCount
+    }
     const room = await service.createRoom(clean)
     await attachRuntime(host, room.id)
     return room
@@ -175,11 +178,13 @@ export function registerIpcHandlers(host: IpcHost, getWindow: () => BrowserWindo
     const value = asRecord(input)
     const clean: UpdateAgentInput = { agentId: asString(value.agentId, 'agentId') }
     const name = optionalString(value.name)
+    const title = optionalString(value.title)
     const persona = optionalString(value.persona)
     const model = optionalString(value.model)
     const voiceId = optionalString(value.voiceId)
     const role = optionalString(value.role)
     if (name !== undefined) clean.name = name
+    if (title !== undefined) clean.title = title
     if (persona !== undefined) clean.persona = persona
     if (model !== undefined) clean.model = model
     if (voiceId !== undefined) clean.voiceId = voiceId

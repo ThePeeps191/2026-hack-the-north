@@ -17,6 +17,7 @@ import { SettingsDialog } from './SettingsDialog'
 import { Sidebar } from './Sidebar'
 import { Stage } from './Stage'
 import { useNow } from './ui'
+import { playCallCue } from '../voice/cues'
 
 /**
  * The call screen shell.
@@ -242,7 +243,7 @@ export function CallShell(props: CallScreenProps): JSX.Element {
         creating={false}
         now={now}
         onSelectRoom={(roomId) => void actions.selectRoom(roomId)}
-        onCreateRoom={() => void actions.createRoom()}
+        onCreateRoom={(name, agentCount) => void actions.createRoom({ name, agentCount })}
         onRemoveRoom={(roomId) => void actions.removeRoom(roomId)}
         onOpenSpotlight={openSpotlight}
         onOpenSettings={() => setSettingsOpen(true)}
@@ -268,8 +269,14 @@ export function CallShell(props: CallScreenProps): JSX.Element {
           label={stageLabel}
           humanAvatar={HUMAN_AVATAR}
           humanColor={HUMAN_COLOR}
-          onJoin={() => void actions.joinCall()}
-          onLeave={() => void actions.leaveCall()}
+          onJoin={() => {
+            playCallCue('join')
+            void actions.joinCall()
+          }}
+          onLeave={() => {
+            playCallCue('leave')
+            void actions.leaveCall()
+          }}
           joinDisabledReason={joinDisabledReason}
           onOpenSpotlight={openSpotlight}
           onShowShare={(owner, surface) => void actions.showShare(owner, surface)}
@@ -301,8 +308,14 @@ export function CallShell(props: CallScreenProps): JSX.Element {
           stage={room.stage}
           railOpen={railOpen}
           teamWorkspaceLabel={team ? team.label : null}
-          onJoin={() => void actions.joinCall()}
-          onLeave={() => void actions.leaveCall()}
+          onJoin={() => {
+            playCallCue('join')
+            void actions.joinCall()
+          }}
+          onLeave={() => {
+            playCallCue('leave')
+            void actions.leaveCall()
+          }}
           onToggleMic={() => void actions.toggleMic()}
           onToggleDeafen={() => void actions.toggleDeafen()}
           onStopSpeaking={(scope) => void actions.stopSpeaking(scope)}

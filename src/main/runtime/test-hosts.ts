@@ -62,6 +62,7 @@ export function makeAgent(over: Partial<Agent> = {}): Agent {
     roomId: 'r1',
     presetId: 'maya',
     name: 'Maya',
+    title: '',
     role: 'frontend',
     summary: 'Frontend — interface, interaction and styling',
     persona: 'You are Maya, the frontend engineer.',
@@ -161,6 +162,22 @@ export class FakeBus implements HuddleBus {
     if (!agent) return null
     Object.assign(agent, patch)
     return { ...agent }
+  }
+
+  upsertAgent(agent: Agent): Agent {
+    const existing = this.agents.find((candidate) => candidate.id === agent.id)
+    if (existing) {
+      Object.assign(existing, agent)
+      return { ...existing }
+    }
+    this.agents.push(agent)
+    return { ...agent }
+  }
+
+  removeAgentById(agentId: string): boolean {
+    const before = this.agents.length
+    this.agents = this.agents.filter((agent) => agent.id !== agentId)
+    return this.agents.length < before
   }
 
   upsertTask(task: Task): void {

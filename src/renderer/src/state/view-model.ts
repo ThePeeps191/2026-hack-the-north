@@ -51,7 +51,7 @@ export interface HumanPresence {
 
 export interface CallActions {
   // rooms
-  createRoom: () => Promise<void>
+  createRoom: (input?: { name?: string; agentCount?: number }) => Promise<void>
   selectRoom: (roomId: string) => Promise<void>
   removeRoom: (roomId: string) => Promise<void>
   renameRoom: (name: string) => Promise<void>

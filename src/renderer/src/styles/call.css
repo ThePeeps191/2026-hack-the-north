@@ -126,6 +126,112 @@
  * Shell
  * ------------------------------------------------------------------ */
 
+.hs-launch {
+  height: 100%;
+  display: grid;
+  place-items: center;
+  padding: 32px;
+  background: var(--bg, #131417);
+  color: var(--text, #ece9e3);
+}
+.hs-launch-card {
+  width: min(520px, 100%);
+  display: grid;
+  gap: 16px;
+}
+.hs-launch-kicker {
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  font-size: 11px;
+  color: var(--muted, #a7a9b0);
+  margin: 0;
+}
+.hs-launch-card h1 {
+  margin: 0;
+  font-size: 28px;
+  font-weight: 600;
+}
+.hs-launch-card > p {
+  margin: 0;
+  color: var(--muted, #a7a9b0);
+  line-height: 1.45;
+}
+.hs-create-room {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid var(--line, rgba(236,231,220,0.08));
+  border-radius: 12px;
+  background: var(--bg-raised, #191b1f);
+}
+.hs-create-room h2 {
+  margin: 0;
+  font-size: 16px;
+}
+.hs-create-room > p {
+  margin: 0;
+  color: var(--muted, #a7a9b0);
+  font-size: 13px;
+}
+.hs-create-room-count {
+  border: 0;
+  padding: 0;
+  margin: 0;
+}
+.hs-create-room-count legend {
+  font-size: 12px;
+  color: var(--muted, #a7a9b0);
+  margin-bottom: 8px;
+}
+.hs-create-room-picks {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 6px;
+}
+.hs-create-room-picks button {
+  height: 36px;
+  border-radius: 8px;
+  border: 1px solid var(--line, rgba(236,231,220,0.08));
+  background: var(--bg-inset, #0e0f12);
+  color: var(--text, #ece9e3);
+}
+.hs-create-room-picks button.is-selected {
+  border-color: var(--accent, #f0a868);
+  color: var(--accent, #f0a868);
+}
+.hs-create-room-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.hs-launch-saved h2 {
+  font-size: 13px;
+  color: var(--muted, #a7a9b0);
+  font-weight: 500;
+}
+.hs-launch-saved ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+.hs-launch-saved button {
+  width: 100%;
+  text-align: left;
+  display: grid;
+  gap: 2px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--line, rgba(236,231,220,0.08));
+  background: var(--bg-raised, #191b1f);
+  color: var(--text, #ece9e3);
+}
+.hs-launch-saved button span:last-child {
+  color: var(--muted, #a7a9b0);
+  font-size: 12px;
+}
+
 .hs-app {
   height: 100%;
   display: flex;
